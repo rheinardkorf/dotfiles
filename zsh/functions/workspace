@@ -1,0 +1,6 @@
+# Set an symlink at ~/workspace pointing to current directory.
+function set-workspace() {
+  PWD=`pwd`
+  rm ~/workspace
+  ln -s $PWD ~/workspace
+}

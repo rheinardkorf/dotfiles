@@ -1,0 +1,20 @@
+#!/bin/bash
+
+if [ -L ~/.zshrc ]; then
+    rm ~/.zshrc
+    ln -s $DOTFILE/zsh/.zshrc ~/.zshrc
+else
+    if [ -f ~/.zshrc ]; then
+        mv ~/.zshrc ~/.zshrc.local
+    fi
+    ln -s $DOTFILE/zsh/.zshrc ~/.zshrc
+fi
+
+if [ -L ~/.zsh ]; then
+    rm ~/.zsh
+    ln -s $DOTFILE/zsh ~/.zsh
+else
+    ln -s $DOTFILE/zsh ~/.zsh
+fi
+
+echo "OH!"
