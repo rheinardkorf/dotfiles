@@ -9,7 +9,7 @@ RPROMPT=''
 function _current_dir() {
   local _max_pwd_length="65"
   if [[ $(echo -n $PWD | wc -c) -gt ${_max_pwd_length} ]]; then
-    echo "%{$fg_bold[blue]%}%-2~ ... %3~%{$reset_color%} "
+    echo "%{$fg_bold[blue]%}%3~%{$reset_color%} "
   else
     echo "%{$fg_bold[blue]%}%~%{$reset_color%} "
   fi
@@ -34,8 +34,8 @@ fi
 
 MODE_INDICATOR="%{$fg_bold[yellow]%}❮%{$reset_color%}%{$fg[yellow]%}❮❮%{$reset_color%}"
 
-ZSH_THEME_GIT_PROMPT_PREFIX="( %{$fg[magenta]%}"
-ZSH_THEME_GIT_PROMPT_SUFFIX=" )%{$reset_color%}"
+ZSH_THEME_GIT_PROMPT_PREFIX="(%{$fg[magenta]%}"
+ZSH_THEME_GIT_PROMPT_SUFFIX=")%{$reset_color%}"
 
 ZSH_THEME_GIT_PROMPT_DIRTY=" %{$fg[red]%}✗%{$reset_color%}"
 ZSH_THEME_GIT_PROMPT_CLEAN=" %{$fg[green]%}✔%{$reset_color%}"
