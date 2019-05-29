@@ -15,7 +15,7 @@ let g:lightline = {
       \   'separator': { 'left': "\uE0B0", 'right': '' },
 \ }
 
-function! GitHead()
+function GitHead()
         return exists('*fugitive#head') ? "\uE0A0". fugitive#head() : ''
 endfunction
 

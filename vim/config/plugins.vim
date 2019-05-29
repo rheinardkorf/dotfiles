@@ -23,7 +23,7 @@ Plug 'scrooloose/nerdtree'
 " === GIT ===
 
 " A Vim plugin which shows a git diff in the gutter (sign column) and stages/undoes hunks.
-" Plug 'airblade/vim-gitgutter'
+Plug 'airblade/vim-gitgutter'
 
 " fugitive.vim: A Git wrapper so awesome, it should be illegal.
 Plug 'tpope/vim-fugitive'
@@ -139,7 +139,7 @@ Plug 'ctrlpvim/ctrlp.vim'
 Plug 'fatih/vim-go', { 'do': ':GoInstallBinaries' }
 
 " A better JSON for Vim: distinct highlighting of keywords vs values, JSON-specific (non-JS) warnings, quote concealing.
-" Plug 'elzr/vim-json'
+Plug 'elzr/vim-json'
 
 " Vim Markdown runtime files (use default if available instead)
 """ " Plug 'tpope/vim-markdown'
@@ -173,19 +173,28 @@ Plug 'fatih/vim-go', { 'do': ':GoInstallBinaries' }
 " vim interface to Web API
 """ " Plug 'mattn/webapi-vim'
 
+" === Coverage ===
+
+" Has issue with Vim 8+
+" Plug 'joonty/vim-phpqa'
+
 " === Completion ===
 
 " A Vim plugin that manages your tag files
 Plug 'ludovicchabant/vim-gutentags'
 
-if has('nvim')
-  Plug 'Shougo/deoplete.nvim', { 'do': ':UpdateRemotePlugins' }
-else
-  Plug 'Shougo/deoplete.nvim'
-  Plug 'roxma/nvim-yarp'
-  Plug 'roxma/vim-hug-neovim-rpc'
-endif
-let g:deoplete#enable_at_startup = 1
+" YouCompleteMe
+" Plug 'Valloric/YouCompleteMe'
+
+" deoplete has issues with Vim 8+
+" if has('nvim')
+"   Plug 'Shougo/deoplete.nvim', { 'do': ':UpdateRemotePlugins' }
+" else
+"   Plug 'Shougo/deoplete.nvim'
+"   Plug 'roxma/nvim-yarp'
+"   Plug 'roxma/vim-hug-neovim-rpc'
+" endif
+" let g:deoplete#enable_at_startup = 1
 
 call plug#end()
 

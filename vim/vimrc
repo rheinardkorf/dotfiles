@@ -1,8 +1,19 @@
+" === NOTICE: Silence `imp` warning until fixed in vim ===
+if has('python3')
+  silent! python3 1
+endif
+
 " === Source all config files ===
 " Sources all files in ./config/*.vim
 for f in split(glob('~/.vim/config/*.vim'), '\n')
     exe 'source' f
 endfor
+
+" === Source all custom files ===
+" Sources all files in ./custom/*.vim
+" for f in split(glob('~/.vim/custom/*.vim'), '\n')
+    " exe 'source' f
+" endfor
 
 " === Source all settings ===
 " Sources all files in ./settings/*.vim
