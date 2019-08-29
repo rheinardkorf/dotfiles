@@ -9,9 +9,9 @@ RPROMPT=''
 function _current_dir() {
   local _max_pwd_length="65"
   if [[ $(echo -n $PWD | wc -c) -gt ${_max_pwd_length} ]]; then
-    echo "%{$fg_bold[blue]%}%3~%{$reset_color%} "
+    echo "%{$FX[bold]$FG[075]%}%3~%{$reset_color%} "
   else
-    echo "%{$fg_bold[blue]%}%~%{$reset_color%} "
+    echo "%{$FX[bold]$FG[075]%}%~%{$reset_color%} "
   fi
 }
 

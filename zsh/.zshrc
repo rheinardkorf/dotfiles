@@ -7,7 +7,8 @@ if [ ! -n "$ZSH" ]; then
 fi
 
 ZSH_CUSTOM=~/dotfiles/zsh/custom
-ZSH_THEME="rheinard"
+# ZSH_THEME="rheinard"
+ZSH_THEME="spaceship-prompt/spaceship"
 
 if [ ! -z ~/.zsh/functions ]; then
   for function in ~/.zsh/functions/*; do
