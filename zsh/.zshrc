@@ -73,3 +73,11 @@ _load_settings "$HOME/.zsh/configs"
 # tabtab source for slss package
 # uninstall by removing these lines or running `tabtab uninstall slss`
 [[ -f /Users/rheinardkorf/Development/hussle/xhq-2.0/backend/node_modules/tabtab/.completions/slss.zsh ]] && . /Users/rheinardkorf/Development/hussle/xhq-2.0/backend/node_modules/tabtab/.completions/slss.zsh
+
+# [[ -f /usr/local/etc/zsh/completion/deno.sh ]] && source /usr/local/etc/zsh/completion/deno.sh
+
+export WASMTIME_HOME="$HOME/.wasmtime"
+
+export PATH="$WASMTIME_HOME/bin:$PATH"
+
+export DOTOKEN=6fb26356aa0e0bc7f795716c76ace1057f8da6bbf175fcb7c2e832149265af0f
