@@ -1,6 +1,6 @@
 # dotfiles
 
-Slow migration of my dot files to this repo....
+Slow migration of my dot files to this repo...
 
 **TL;DR;**
 
