@@ -1,0 +1,4 @@
+# Stop all running containers.
+function docker-halt() {
+    docker stop $(docker ps -q)
+}

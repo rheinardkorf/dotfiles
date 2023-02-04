@@ -1,0 +1,30 @@
+#!/bin/bash
+
+echo "Checking for .oh-my-zsh..."
+if [ -d ~/.oh-my-zsh ]; then
+    echo "Oh My Zsh! is already installed. 👍"
+else
+    sh -c "$(curl -fsSL https://raw.githubusercontent.com/robbyrussell/oh-my-zsh/master/tools/install.sh)"
+fi
+
+if [ -L ~/.zshrc ]; then
+    rm ~/.zshrc
+    ln -s $DOTFILE/zsh/.zshrc ~/.zshrc
+else
+    if [ -f ~/.zshrc ]; then
+        mv ~/.zshrc ~/.zshrc.local
+    fi
+    ln -s $DOTFILE/zsh/.zshrc ~/.zshrc
+fi
+
+if [ -L ~/.zsh ]; then
+    rm ~/.zsh
+    ln -s $DOTFILE/zsh ~/.zsh
+else
+    if [ -f ~/.zsh ]; then
+        mv ~/.zsh ~/.zsh.original
+    fi
+    ln -s $DOTFILE/zsh ~/.zsh
+fi
+
+echo "Oh My Zsh! setup complete."
