@@ -59,5 +59,7 @@ cask "docker"
 cask "espanso"
 # GraphQL IDE for better development workflows
 cask "graphql-playground"
+# Terminal emulator as alternative to Apple's Terminal app
+cask "iterm2"
 # Reverse proxy, secure introspectable tunnels to localhost
 cask "ngrok"
