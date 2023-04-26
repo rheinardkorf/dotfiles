@@ -1,0 +1,52 @@
+{
+    "workbench.colorTheme": "Gray Matter Light",
+    "editor.minimap.enabled": false,
+    "editor.wrappingIndent": "indent",
+    "editor.overviewRulerBorder": false,
+    "editor.lineHeight": 24,
+    "[markdown]": {
+        "editor.quickSuggestions": {
+            "comments": "on",
+            "strings": "on",
+            "other": "on"
+        }
+    },
+    "git.enableSmartCommit": true,
+    "git.postCommitCommand": "sync",
+    "workbench.colorCustomizations": {
+        "terminal.foreground": "#acacac",
+        "titleBar.activeBackground": "#db662f",
+        "titleBar.inactiveBackground": "#db662f"
+    },
+    "workbench.editor.enablePreview": false,
+    "markdown.exctensions.preview.autoShowPriviewToSide": false,
+    "workbench.sideBar.location": "right",
+    "workbench.editor.revealIfOpen": true,
+    "vscodeMarkdownNotes.newNoteTemplate": "---\\ntitle: ${noteName}\\ndate: ${timestamp}\\n---\\n\\n",
+    "markdown-image.local.path": "images",
+    "foam.dateSnippets.afterCompletion": "noop",
+    "foam.logging.level": "debug",
+    "vscodeMarkdownNotes.noteCompletionConvention": "noExtension",
+    "vscodeMarkdownNotes.previewShowFileExtension": true,
+    "foam.decorations.links.enable": false,
+    "foam.edit.linkReferenceDefinitions": "off",
+    "foam.links.hover.enable": false,
+    "saveAndRun": {
+		"commands": [
+			{
+				"match": "\\.md$",
+				"cmd": "node ./_11ty/applyRefs.js ${file}",
+				"silent":true,
+                "isAsync": true
+			}
+		]
+	},
+    "emeraldwalk.runonsave": {
+        "commands": [
+            {
+                "match": "\\.md$",
+                "cmd": "node test.js ${file}.'"
+            }
+        ]
+    }
+}

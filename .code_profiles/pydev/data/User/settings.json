@@ -1,0 +1,44 @@
+{
+    "editor.tabCompletion": "on",
+    "editor.snippetSuggestions": "top",
+    "editor.quickSuggestions": {
+        "other": true,
+        "comments": false,
+        "strings": false
+    },
+    "editor.inlineSuggest.enabled": true,
+    "editor.minimap.enabled": false,
+    "editor.fontFamily": "Hack, Menlo, Monaco, 'Courier New', monospace, 'Apple Color Emoji'",
+    "editor.fontSize": 14,
+    "editor.cursorStyle": "line",
+    "editor.cursorBlinking": "solid",
+    "workbench.colorCustomizations": {
+        "statusBar.background": "#4787b9",
+        "statusBar.noFolderBackground": "#f7df1e",
+        "statusBar.foreground": "#000000",
+        "sideBar.background": "#2b2702",
+        "activityBar.background": "#4787b9",
+        "activityBar.foreground": "#000000",
+    },
+    "workbench.editor.showTabs": false,
+    "workbench.fontAliasing": "auto",
+    "workbench.startupEditor": "newUntitledFile",
+    "workbench.settings.editor": "json",
+    "workbench.editor.tabCloseButton": "off",
+    "workbench.sideBar.location": "right",
+    "workbench.editor.enablePreview": false,
+    "explorer.openEditors.visible": 0,
+    "zenMode.centerLayout": false,
+    "terminal.integrated.fontSize": 14,
+    "terminal.integrated.defaultProfile.osx": "zsh",
+    "files.defaultLanguage": "markdown",
+    "security.workspace.trust.untrustedFiles": "open",
+    "nxConsole.enableTelemetry": false,
+    "[typescript]": {
+        "editor.defaultFormatter": "esbenp.prettier-vscode"
+    },
+    "aws.telemetry": false,
+    "[json]": {
+        "editor.defaultFormatter": "esbenp.prettier-vscode"
+    }
+}

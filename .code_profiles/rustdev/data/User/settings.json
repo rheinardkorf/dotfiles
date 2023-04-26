@@ -1,0 +1,67 @@
+{
+    "workbench.colorCustomizations": {
+        "statusBar.background": "#a72145",
+        "sideBar.background": "#420717",
+        "activityBar.background": "#a72145"
+    },
+    "workbench.sideBar.location": "right",
+    "workbench.editor.enablePreview": false,
+    "markdown.extension.preview.autoShowPreviewToSide": false,
+    "editor.minimap.enabled": false,
+    "editor.fontFamily": "Hack, Menlo, Monaco, 'Courier New', monospace, 'Apple Color Emoji'",
+    "editor.fontSize": 14,
+    "editor.cursorStyle": "line",
+    "editor.cursorBlinking": "solid",
+    "workbench.editor.showTabs": false,
+    "workbench.fontAliasing": "auto",
+    "workbench.startupEditor": "newUntitledFile",
+    "workbench.settings.editor": "json",
+    "workbench.editor.tabCloseButton": "off",
+    "explorer.openEditors.visible": 0,
+    "window.zoomLevel": 0,
+    "zenMode.centerLayout": false,
+    "terminal.integrated.fontSize": 14,
+    "files.defaultLanguage": "markdown",
+    "terminal.integrated.profiles.osx": {
+        "bash": {
+            "path": "bash",
+            "args": [
+                "-l"
+            ],
+            "icon": "terminal-bash"
+        },
+        "zsh": {
+            "path": "zsh",
+            "args": [
+                "-l"
+            ]
+        },
+        "fish": {
+            "path": "fish",
+            "args": [
+                "-l"
+            ]
+        },
+        "tmux": {
+            "path": "tmux",
+            "icon": "terminal-tmux"
+        },
+        "pwsh": {
+            "path": "pwsh",
+            "icon": "terminal-powershell"
+        }
+    },
+    "terminal.integrated.defaultProfile.osx": "zsh",
+    "editor.largeFileOptimizations": false,
+    "editor.inlayHints.enabled": "offUnlessPressed",
+    "[typescriptreact]": {
+        "editor.defaultFormatter": "esbenp.prettier-vscode"
+    },
+    "[javascript]": {
+        "editor.defaultFormatter": "vscode.typescript-language-features"
+    },
+    "[typescript]": {
+        "editor.defaultFormatter": "vscode.typescript-language-features"
+    }
+    // RUST SETTINGS BELOW  —————————————————————————————  
+}

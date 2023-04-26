@@ -1,0 +1,39 @@
+{
+    "editor.tabCompletion": "on",
+    "editor.snippetSuggestions": "top",
+    "editor.quickSuggestions": {
+        "other": true,
+        "comments": false,
+        "strings": false
+    },
+    "editor.inlineSuggest.enabled": true,
+    "editor.minimap.enabled": false,
+    "editor.fontFamily": "Hack, Menlo, Monaco, 'Courier New', monospace, 'Apple Color Emoji'",
+    "editor.fontSize": 14,
+    "editor.cursorStyle": "line",
+    "editor.cursorBlinking": "solid",
+    "workbench.colorCustomizations": {
+        "statusBar.background": "#0004ff",
+        "statusBar.noFolderBackground": "#0004ff",
+        "statusBar.foreground": "#fff",
+        "sideBar.background": "#2b2702",
+        "activityBar.background": "#0004ff",
+        "activityBar.foreground": "#fff",
+    },
+    "workbench.editor.showTabs": false,
+    "workbench.fontAliasing": "auto",
+    "workbench.startupEditor": "newUntitledFile",
+    "workbench.settings.editor": "json",
+    "workbench.editor.tabCloseButton": "off",
+    "workbench.sideBar.location": "right",
+    "workbench.editor.enablePreview": false,
+    "explorer.openEditors.visible": 0,
+    "zenMode.centerLayout": false,
+    "terminal.integrated.fontSize": 14,
+    "terminal.integrated.defaultProfile.osx": "zsh",
+    "files.defaultLanguage": "markdown",
+    "security.workspace.trust.untrustedFiles": "open",
+    "fpctoolkit.env.PP": "/opt/homebrew/bin/fpc",
+    "fpctoolkit.env.FPCDIR": "/Users/rheinardkorf/Utilities/fpc_src"
+    
+}
