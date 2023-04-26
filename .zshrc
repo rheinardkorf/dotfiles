@@ -1,7 +1,10 @@
+export ZSH="$HOME/.config/oh-my-zsh"
 ZSH_CUSTOM=$HOME/.config/zsh/custom
 ZSH_THEME="robbyrussell"
 
 plugins=(git)
+
+source $ZSH/oh-my-zsh.sh
 
 if [ ! -z $HOME/.config/zsh/functions ]; then
   for function in $HOME/.config/zsh/functions/*; do
