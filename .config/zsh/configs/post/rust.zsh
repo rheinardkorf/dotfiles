@@ -1,3 +1,3 @@
 ## Add Rust Support.
-source $HOME/.cargo/env
+# source $HOME/.cargo/env
 

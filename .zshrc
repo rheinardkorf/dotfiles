@@ -1,13 +1,7 @@
-if [ ! -n "$ZSH" ]; then
-  export ZSH=~/.oh-my-zsh
-fi
-
 ZSH_CUSTOM=$HOME/.config/zsh/custom
 ZSH_THEME="robbyrussell"
 
 plugins=(git)
-
-source $ZSH/oh-my-zsh.sh
 
 if [ ! -z $HOME/.config/zsh/functions ]; then
   for function in $HOME/.config/zsh/functions/*; do
@@ -60,3 +54,7 @@ _load_settings "$HOME/.config/zsh/configs"
 # aliases
 [[ -f ~/.aliases ]] && source ~/.aliases
 
+
+export NVM_DIR="$HOME/.nvm"
+[ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"  # This loads nvm
+[ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion"  # This loads nvm bash_completion
