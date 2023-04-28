@@ -1,6 +1,8 @@
 .cfg
 .DS_Store
 
+.config/karabiner/automatic_backups/*
+
 # Logs
 logs
 *.log
