@@ -2,12 +2,17 @@ vim.g.mapleader = " "
 
 local keymap = vim.keymap -- easier :D
 
--- Cursor bindings
+-- Colemak bindings
 keymap.set({"n", "v", "o"}, "n", "h") -- h
 keymap.set({"n", "v", "o"}, "e", "j") -- j
 keymap.set({"n", "v", "o"}, "i", "k") -- k
-keymap.set({"n", "v", "o"}, "I", "K") -- k
 keymap.set({"n", "v", "o"}, "o", "l") -- l
+keymap.set({"n", "v", "o"}, "N", "H") -- h
+keymap.set({"n", "v", "o"}, "E", "J") -- j
+keymap.set({"n", "v", "o"}, "I", "K") -- k
+keymap.set({"n", "v", "o"}, "O", "L") -- l
+keymap.set({"n", "v", "o"}, "H", "zz") -- l
+
 
 -- Motions
 keymap.set({"n", "v", "o"}, "u", "i") -- Insert mode
@@ -17,8 +22,8 @@ keymap.set({"n", "v", "o"}, "L", ":redo<CR>") -- Redo
 keymap.set({"n", "v", "o"}, "j", "o") -- Line Insert mode
 keymap.set({"n", "v", "o"}, "J", "O") -- 
 -- e, E --
-keymap.set({"n", "v", "o"},"m", "e")
-keymap.set({"n", "v", "o"},"M", "E")
+keymap.set({"n", "v", "o"},"f", "e")
+keymap.set({"n", "v", "o"},"F", "E")
 
 -- Window bindings
 keymap.set("n", "<leader>st", "<C-w>v") -- split window vertically
