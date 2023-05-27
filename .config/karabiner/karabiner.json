@@ -2088,17 +2088,17 @@
                             },
                             "to": [
                                 {
-                                    "key_code": "left_shift"
+                                    "key_code": "escape"
                                 }
                             ]
                         },
                         {
                             "from": {
-                                "key_code": "left_shift"
+                                "key_code": "tab"
                             },
                             "to": [
                                 {
-                                    "key_code": "escape"
+                                    "key_code": "tab"
                                 }
                             ]
                         }
