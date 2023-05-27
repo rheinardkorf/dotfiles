@@ -4,6 +4,42 @@
 .config/karabiner/automatic_backups/*
 .config/oh-my-zsh
 
+# Things to avoid...
+.aws/credentials
+.ssh
+.bash_history
+.cargo
+.cdk
+*/Cache/*
+*/CacheData/*
+.code_profiles/*/data/*
+.code_profiles/*/ext/*
+.cups
+.docker
+.pyenv
+.local/share
+.python_history
+.rustup/toolchains
+.local/state
+.nvm
+.vim/undodir
+.zsh_sessions
+.zcompdump
+.zsh_history
+Library
+Desktop
+Development
+Downloads
+Documents
+Experiments
+Movies
+Music
+Pictures
+Public
+
+!.config
+
+
 # Logs
 logs
 *.log
