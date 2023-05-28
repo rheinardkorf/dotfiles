@@ -1,0 +1,49 @@
+{
+        ;; Define different kinds of keyboards
+        :devices {
+                :kb-apple [
+                        {:vendor_id 1452}                               ;; product_id 636 for MacBook Pro (15-inch, 2018) internal keyboard
+                        {:vendor_id 76}
+                ]
+                :kb-moonlander [
+                        {:vendor_id 12951}                              
+                ]
+        } ;; devices
+        :main [
+                {       
+                        :des "Colemak DH"
+                        :rules [
+                                        :!kb-moonlander
+                                        [:##a :a :!qwerty-mode]
+                                        [:##b :v :!qwerty-mode]
+                                        [:##c :c :!qwerty-mode]
+                                        [:##d :s :!qwerty-mode]
+                                        [:##e :f :!qwerty-mode]
+                                        [:##f :t :!qwerty-mode]
+                                        [:##g :g :!qwerty-mode]
+                                        [:##h :m :!qwerty-mode]
+                                        [:##i :u :!qwerty-mode]
+                                        [:##j :n :!qwerty-mode]
+                                        [:##k :e :!qwerty-mode]
+                                        [:##l :i :!qwerty-mode]
+                                        [:##m :h :!qwerty-mode]
+                                        [:##n :k :!qwerty-mode]
+                                        [:##o :y :!qwerty-mode]
+                                        [:##p :semicolon :!qwerty-mode]
+                                        [:##q :q :!qwerty-mode]
+                                        [:##r :p :!qwerty-mode]
+                                        [:##s :r :!qwerty-mode]
+                                        [:##t :b :!qwerty-mode]
+                                        [:##u :l :!qwerty-mode]
+                                        [:##v :d :!qwerty-mode]
+                                        [:##w :w :!qwerty-mode]
+                                        [:##x :x :!qwerty-mode]
+                                        [:##y :j :!qwerty-mode]
+                                        [:##z :z :!qwerty-mode]
+                                        [:##semicolon :o :!qwerty-mode]
+                                        [:!CSgrave_accent_and_tilde ["qwerty-mode" 1] :!qwerty-mode]
+                                        [:!CSgrave_accent_and_tilde ["qwerty-mode" 0] :qwerty-mode]
+                                ]
+                }
+        ]
+}
