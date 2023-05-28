@@ -41,8 +41,10 @@
                                         [:##y :j :!qwerty-mode]
                                         [:##z :z :!qwerty-mode]
                                         [:##semicolon :o :!qwerty-mode]
+                                        ;; Qwerty toggle
                                         [:!CSgrave_accent_and_tilde ["qwerty-mode" 1] :!qwerty-mode]
                                         [:!CSgrave_accent_and_tilde ["qwerty-mode" 0] :qwerty-mode]
+                                        [:caps_lock :!CTOleft_shift nil {:alone :escape}]
                                 ]
                 }
         ]

@@ -631,6 +631,24 @@
             "type" : "variable_if"
           } ],
           "type" : "basic"
+        }, {
+          "to_if_alone" : [ {
+            "key_code" : "escape"
+          } ],
+          "from" : {
+            "key_code" : "caps_lock"
+          },
+          "to" : [ {
+            "key_code" : "left_shift",
+            "modifiers" : [ "left_command", "left_control", "left_option" ]
+          } ],
+          "conditions" : [ {
+            "identifiers" : [ {
+              "vendor_id" : 12951
+            } ],
+            "type" : "device_unless"
+          } ],
+          "type" : "basic"
         } ]
       } ]
     },
