@@ -1,1 +1,1 @@
-alias stable-diffusion="bash ~/Experiments/ai/stable-diffusion/launch.sh"
+alias stable-diffusion="zsh ~/Experiments/ai/stable-diffusion/launch.sh"
