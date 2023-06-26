@@ -22,13 +22,6 @@ return require('packer').startup(function(use)
         end
     })
 
-    --  use({
-    --     'mhartington/oceanic-next',
-    --     as = 'OceanicNext',
-    --     config = function()
-    --         vim.cmd('colorscheme OceanicNext')
-    --     end
-    -- })
 
     -- tmux & split window nav
     use("christoomey/vim-tmux-navigator")
@@ -77,6 +70,15 @@ return require('packer').startup(function(use)
         requires = { 'kyazdani42/nvim-web-devicons', opt = true }
     }
 
-     -- VimBeGood
+    -- Markdown Preview
+    -- install without yarn or npm
+    use({
+        "iamcco/markdown-preview.nvim",
+        run = function() vim.fn["mkdp#util#install"]() end,
+    })
+
+    use({ "iamcco/markdown-preview.nvim", run = "cd app && npm install", setup = function() vim.g.mkdp_filetypes = { "markdown" } end, ft = { "markdown" }, })
+
+    -- VimBeGood
     use("ThePrimeagen/vim-be-good")
 end)

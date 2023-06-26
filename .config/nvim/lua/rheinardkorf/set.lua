@@ -33,3 +33,4 @@ vim.opt.colorcolumn = "80"
 
 vim.api.nvim_set_option("clipboard","unnamedplus")
 
+vim.g.netrw_bufsettings="noma nomod nonu nobl nowrap ro rnu"
