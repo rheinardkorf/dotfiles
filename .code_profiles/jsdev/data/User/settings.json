@@ -49,5 +49,6 @@
     ],
     "aws.suppressPrompts": {
         "regionAddAutomatically": true
-    }
+    },
+    "workbench.colorTheme": "Default Dark+"
 }
