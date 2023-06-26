@@ -1,0 +1,20 @@
+matches:
+  - trigger: ..agenda
+    replace: |
+      Date: {{mdate}}
+
+      Attendees: 
+
+      Quick Updates:
+      *
+ 
+      Questions to be resolved:
+      *
+
+      Next Steps:
+      *
+    vars:
+     - name: mdate
+       type: date
+       params:
+         format: "%Y-%m-%d"
