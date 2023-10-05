@@ -1,0 +1,11 @@
+# Update  worktrees.
+function update-worktrees() {
+    git worktree list | tail -n +2 | awk '{print $1}' | xargs -I % git -C % pull
+}
+
+# Update all worktrees below current dir.
+function update-all-worktrees() {
+    find . -maxdepth 1 -type d -exec sh -c '(cd {} && git fetch && git worktree list | tail -n +2 | awk "{print \$1}" | xargs -I % git -C % pull)' \;
+}
+
+
