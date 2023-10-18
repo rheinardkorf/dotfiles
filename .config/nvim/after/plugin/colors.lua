@@ -1,3 +1,4 @@
+vim.cmd('colorscheme rose-pine')
 function SetColorScheme(color) 
 	color = color or "rose-pine"
 

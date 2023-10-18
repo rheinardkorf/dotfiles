@@ -2,14 +2,17 @@ local lsp = require("lsp-zero")
 
 lsp.preset("recommended")
 
-lsp.ensure_installed({
-  'tsserver',
-  'eslint',
- -- 'sumneko_lua',
-  'rust_analyzer',
+require('mason').setup({})
+require('mason-lspconfig').setup({
+  ensure_installed = { 'tsserver', 'eslint', 'rust_analyzer' },
+  handlers = {
+      lsp.default_setup,
+  },    
 })
 
 local cmp = require('cmp')
+local cmp_action = require('lsp-zero').cmp_action()
+
 local cmp_select = {behavior = cmp.SelectBehavior.Select}
 local cmp_mappings = lsp.defaults.cmp_mappings({
   ['<C-p>'] = cmp.mapping.select_prev_item(cmp_select),
@@ -22,7 +25,7 @@ lsp.set_preferences({
   sign_icons = { }
 })
 
-lsp.setup_nvim_cmp({
+cmp.setup({
   mapping = cmp_mappings
 })
 
