@@ -1,2 +1,2 @@
-require("rheinardkorf")
+require("core")
 
