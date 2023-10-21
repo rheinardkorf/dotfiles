@@ -10,6 +10,7 @@ return {
     --     {'<C-i>', function() ui.nav_file(3) end, mode = 'n'},
     --     {'<C-o>', function() ui.nav_file(4) end, mode = 'n'},
     -- },
+    lazy = false,
     config = function()
         local mark = require("harpoon.mark")
         local ui = require("harpoon.ui")

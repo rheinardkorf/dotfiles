@@ -1,2 +1,3 @@
-require("core")
+require("rheinard.core")
+require("rheinard.lazy")
 
