@@ -19,12 +19,21 @@ return {
         'hrsh7th/nvim-cmp',
         event = 'InsertEnter',
         dependencies = {
-            "hrsh7th/cmp-buffer",   -- source for text in buffer
-            "hrsh7th/cmp-path",     -- source for file system paths
-            "L3MON4D3/LuaSnip",     -- snippet engine
-            "saadparwaiz1/cmp_luasnip", -- for autocompletion
+            "hrsh7th/cmp-nvim-lsp",
+            "hrsh7th/cmp-buffer", -- source for text in buffer
+            "hrsh7th/cmp-path",   -- source for file system paths
+            {
+
+                "L3MON4D3/LuaSnip",
+                -- follow latest release.
+                version = "2.*", -- Replace <CurrentMajor> by the latest released major (first number of latest release)
+                -- install jsregexp (optional!).
+                build = "make install_jsregexp",
+            },
+            "saadparwaiz1/cmp_luasnip",     -- for autocompletion
             "rafamadriz/friendly-snippets", -- useful snippets
-            "onsails/lspkind.nvim", -- vs-code like pictograms
+            "onsails/lspkind.nvim",         -- vs-code like pictograms
+            "hrsh7th/cmp-cmdline",
         },
         config = function()
             -- Here is where you configure the autocompletion settings.
@@ -47,6 +56,24 @@ return {
                     ['<C-p>'] = cmp.mapping.select_prev_item(cmp_select),
                     ['<C-n>'] = cmp.mapping.select_next_item(cmp_select),
                     ['<C-y>'] = cmp.mapping.confirm({ select = true }),
+                }),
+                snippet = {
+                    -- REQUIRED - you must specify a snippet engine
+                    expand = function(args)
+                        -- vim.fn["vsnip#anonymous"](args.body) -- For `vsnip` users.
+                        require('luasnip').lsp_expand(args.body) -- For `luasnip` users.
+                        -- require('snippy').expand_snippet(args.body) -- For `snippy` users.
+                        -- vim.fn["UltiSnips#Anon"](args.body) -- For `ultisnips` users.
+                    end,
+                },
+                sources = cmp.config.sources({
+                    { name = 'nvim_lsp' },
+                    -- { name = 'vsnip' }, -- For vsnip users.
+                    { name = 'luasnip' }, -- For luasnip users.
+                    -- { name = 'ultisnips' }, -- For ultisnips users.
+                    -- { name = 'snippy' }, -- For snippy users.
+                }, {
+                    { name = 'buffer' },
                 })
             })
         end

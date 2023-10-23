@@ -22,6 +22,9 @@ keymap.set({ "n", "v", "o" }, "J", "O")       --
 -- e, E --
 keymap.set({ "n", "v", "o" }, "f", "e")
 keymap.set({ "n", "v", "o" }, "F", "E")
+-- f, F --
+keymap.set({ "n", "v", "o" }, "m", "f")       -- find char | "ju(m)p" char
+keymap.set({ "n", "v", "o" }, "M", "F")
 
 -- Window bindings
 keymap.set("n", "<leader>st", "<C-w>v")               -- split window vertically
