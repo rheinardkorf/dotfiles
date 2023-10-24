@@ -1,30 +1,7 @@
 local keymap = vim.keymap -- easier :D
 
--- Colemak bindings
-keymap.set({ "n", "v", "o" }, "n", "h") -- h
-keymap.set({ "n", "v", "o" }, "e", "j") -- j
-keymap.set({ "n", "v", "o" }, "i", "k") -- k
-keymap.set({ "n", "v", "o" }, "o", "l") -- l
-keymap.set({ "n", "v", "o" }, "N", "H") -- h
-keymap.set({ "n", "v", "o" }, "E", "J") -- j
-keymap.set({ "n", "v", "o" }, "I", "K") -- k
-keymap.set({ "n", "v", "o" }, "O", "L") -- l
-keymap.set({ "n", "v", "o" }, "H", "zz") -- l
-
-
--- Motions
-keymap.set({ "n", "v", "o" }, "u", "i")       -- Insert mode
-keymap.set({ "n", "v", "o" }, "U", "I")       -- Insert mode
-keymap.set({ "n", "v", "o" }, "l", "u")       -- Undo
-keymap.set({ "n", "v", "o" }, "L", ":redo<CR>") -- Redo
-keymap.set({ "n", "v", "o" }, "j", "o")       -- Line Insert mode
-keymap.set({ "n", "v", "o" }, "J", "O")       --
--- e, E --
-keymap.set({ "n", "v", "o" }, "f", "e")
-keymap.set({ "n", "v", "o" }, "F", "E")
--- f, F --
-keymap.set({ "n", "v", "o" }, "m", "f")       -- find char | "ju(m)p" char
-keymap.set({ "n", "v", "o" }, "M", "F")
+-- Fixes
+keymap.set({ "n", "v", "o" }, "U", ":redo<CR>")
 
 -- Window bindings
 keymap.set("n", "<leader>st", "<C-w>v")               -- split window vertically
@@ -48,11 +25,11 @@ keymap.set("n", "<leader>pb", vim.cmd.Ex) -- File explorer
 keymap.set("v", "E", ":m '>+1<CR>gv=gv")
 keymap.set("v", "I", ":m '<-2<CR>gv=gv")
 
-keymap.set("n", "E", "mzJ`z") -- Replace "J" behavior. Append below to this line.
+-- keymap.set("n", "E", "mzJ`z") -- Replace "J" behavior. Append below to this line.
 keymap.set("n", "<C-d>", "<C-d>zz")
 keymap.set("n", "<C-u>", "<C-u>zz")
-keymap.set("n", "k", "nzzzv")
-keymap.set("n", "K", "Nzzzv")
+-- keymap.set("n", "k", "nzzzv")
+-- keymap.set("n", "K", "Nzzzv")
 
 -- greatest remap ever
 keymap.set("x", "<leader>p", "\"_dP")
@@ -79,7 +56,7 @@ end)
 -- -- keymap.set("n", "<leader>k", "<cmd>lnext<CR>zz")
 -- -- keymap.set("n", "<leader>j", "<cmd>lprev<CR>zz")
 --
--- -- keymap.set("n", "<leader>s", ":%s/\\<<C-r><C-w>\\>/<C-r><C-w>/gI<Left><Left><Left>")
+keymap.set("n", "<leader>ss", ":%s/\\<<C-r><C-w>\\>/<C-r><C-w>/gI<Left><Left><Left>")
 -- -- keymap.set("n", "<leader>x", "<cmd>!chmod +x %<CR>", { silent = true })
 
 -- ====== netrw remap =======
@@ -103,8 +80,8 @@ local function netrw_mapping()
     bufmap('.', 'gh')
 
     -- Remap up and down
-    bufmap('i', '<Up>')
-    bufmap('e', '<Down>')
+    -- bufmap('i', '<Up>')
+    -- bufmap('e', '<Down>')
 end
 
 local user_cmds = vim.api.nvim_create_augroup('user_cmds', { clear = true })
