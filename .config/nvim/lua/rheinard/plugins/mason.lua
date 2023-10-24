@@ -21,6 +21,7 @@ return {
                 "eslint",
                 "tsserver",
                 "quick_lint_js",
+                "gopls",
             },
 
             automatic_installation = true,

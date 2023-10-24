@@ -92,7 +92,7 @@ return {
             lsp_zero.extend_lspconfig()
 
             lsp_zero.on_attach(function(client, bufnr)
-                -- see :help lsp-zero-keybindings
+                -- see :help lsp-zero-keybinding
                 -- to learn the available actions
                 lsp_zero.default_keymaps({ buffer = bufnr })
 
@@ -110,9 +110,44 @@ return {
                 vim.keymap.set("i", "<C-h>", function() vim.lsp.buf.signature_help() end, opts)
             end)
 
-            -- (Optional) Configure lua language server for neovim
-            local lua_opts = lsp_zero.nvim_lua_ls()
-            require('lspconfig').lua_ls.setup(lua_opts)
+            lsp_zero.format_on_save({
+                format_opts = {
+                    async = false,
+                    timeout_ms = 10000,
+                },
+                servers = {
+                    -- ['tsserver'] = { 'javascript', 'typescript' },
+                    -- ['rust_analyzer'] = { 'rust' },
+                    ['gopls'] = { 'go' },
+                },
+            })
+
+            local lspconfig = require('lspconfig')
+
+            lspconfig.lua_ls.setup(lsp_zero.nvim_lua_ls())
+
+            require('mason').setup({})
+
+            require("mason-lspconfig").setup_handlers {
+                function(server_name) -- default handler (optional)
+                    require("lspconfig")[server_name].setup {}
+                end,
+                ["gopls"] = function()
+                    lspconfig.gopls.setup({
+                        settings = {
+                            gopls = {
+                                completeUnimported = true,
+                                usePlaceholders = true,
+                                analyses = {
+                                    unusedparams = true,
+                                },
+                                staticcheck = true,
+                                gofumpt = true,
+                            },
+                        },
+                    })
+                end
+            }
         end
     }
 }
