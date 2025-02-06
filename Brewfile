@@ -51,6 +51,12 @@ brew "trash"
 brew "tree"
 # This package contains standard utilities for interacting with MongoDB.
 brew "mongodb/brew/mongodb-database-tools"
+# Golang
+brew "go"
+# Rust Toolchain
+brew "rust"
+# Node Version Manager
+brew "nvm"
 # App to build and share containerized applications and microservices
 cask "docker"
 # Cross-platform Text Expander written in Rust
