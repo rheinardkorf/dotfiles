@@ -1,8 +1,6 @@
 tap "espanso/espanso"
 tap "hashicorp/tap"
 tap "homebrew/bundle"
-tap "homebrew/cask"
-tap "homebrew/core"
 tap "homebrew/services"
 tap "mongodb/brew"
 # Search tool like grep, but optimized for programmers
@@ -42,7 +40,7 @@ brew "openssh"
 # Manage compile and link flags for libraries
 brew "pkg-config"
 # Interpreted, interactive, object-oriented programming language
-brew "python@3.9"
+brew "python"
 # Search tool like grep and The Silver Searcher
 brew "ripgrep"
 # Terminal multiplexer
@@ -62,4 +60,4 @@ cask "graphql-playground"
 # Terminal emulator as alternative to Apple's Terminal app
 cask "iterm2"
 # Reverse proxy, secure introspectable tunnels to localhost
-cask "ngrok"
+# cask "ngrok"
