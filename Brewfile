@@ -61,3 +61,27 @@ cask "graphql-playground"
 cask "iterm2"
 # Reverse proxy, secure introspectable tunnels to localhost
 # cask "ngrok"
+# 1-Password
+cask "1password"
+cask "1password-cli"
+# Alacritty terminal
+cask "alacritty"
+# Brave Browser
+cask "brave-browser"
+# Chrome Browser
+cask "google-chrome"
+# Karabiner Elements - for keyboard tuning.
+cask "karabiner-elements"
+# Postman API tool
+cask "postman"
+# Rectangle window management tool.
+cask "rectangle"
+# Shortcat for instant keybord shortcuts.
+cask "shortcat"
+# Slack
+cask "slack"
+# Tunnelblick VPN tool.
+cask "tunnelblick"
+# Amethyst for auto window layouts.
+cask "amethyst"
+
