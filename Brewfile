@@ -84,4 +84,7 @@ cask "slack"
 cask "tunnelblick"
 # Amethyst for auto window layouts.
 cask "amethyst"
-
+# Cursor AI code editor.
+cask "cursor"
+# Visual Studio Code
+cask "visual-studio-code"
