@@ -6,6 +6,9 @@ return {
     opts = {
         highlight_groups = {
             Visual = { fg = "text", bg = "highlight_high" },
+        },
+        styles = {
+            transparency = true
         }
     },
     config = function()

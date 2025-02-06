@@ -38,5 +38,12 @@ vim.api.nvim_set_option("clipboard","unnamedplus")
 
 vim.g.netrw_bufsettings="noma nomod nonu nobl nowrap ro rnu"
 
+-- vim.opt.list = true
+-- vim.opt.listchars = { tab = '» ', trail = '·', nbsp = '␣' }
+
+vim.opt.cursorline = true
+
+vim.g.have_nerd_font = true
+
 vim.g.mapleader = " "
 vim.g.maplocalleader = " "

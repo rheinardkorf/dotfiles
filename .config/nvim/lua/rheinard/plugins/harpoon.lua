@@ -17,7 +17,7 @@ return {
 
         vim.keymap.set("n", "<leader>aa", mark.add_file)
         vim.keymap.set("n", "<leader>ar", mark.rm_file)
-        vim.keymap.set("n", "<C-m>", ui.toggle_quick_menu)
+        vim.keymap.set("n", "<leader>h", ui.toggle_quick_menu)
 
         vim.keymap.set("n", "<C-n>", function() ui.nav_file(1) end)
         vim.keymap.set("n", "<C-e>", function() ui.nav_file(2) end)
