@@ -16,6 +16,11 @@
 # !.espanso
 #
 
+# Annoying system things...
+.CFUserTextEncoding
+.lesshst
+.terminfo/
+.viminfo
 
 # Things to avoid...
 .aws/*
