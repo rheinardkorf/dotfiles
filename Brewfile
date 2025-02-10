@@ -94,3 +94,9 @@ cask "amethyst"
 cask "cursor"
 # Visual Studio Code
 cask "visual-studio-code"
+# HammerSpoon - A Mac automation/power tool
+cask "hammerspoon"
+# Hiddenbar - Managing Mac menu bar
+cask "hiddenbar"
+# AlDente - remove this if you have Pro
+cask "aldente"
