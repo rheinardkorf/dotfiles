@@ -57,6 +57,9 @@ brew "go"
 brew "rust"
 # Node Version Manager
 brew "nvm"
+# FD / FZF
+brew "fzf"
+brew "fd"
 # App to build and share containerized applications and microservices
 cask "docker"
 # Cross-platform Text Expander written in Rust
