@@ -5,4 +5,5 @@ alias foam="code --extensions-dir ~/.code_profiles/foam/ext --user-data-dir ~/.c
 alias jsdev="code --extensions-dir ~/.code_profiles/jsdev/ext --user-data-dir ~/.code_profiles/jsdev/data"
 alias pasdev="code --extensions-dir ~/.code_profiles/fpc/ext --user-data-dir ~/.code_profiles/fpc/data"
 alias pydev="code --extensions-dir ~/.code_profiles/pydev/ext --user-data-dir ~/.code_profiles/pydev/data"
+alias nsdev="code --extensions-dir ~/.code_profiles/nsdev/ext --user-data-dir ~/.code_profiles/nsdev/data"
 
