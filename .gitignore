@@ -5,6 +5,9 @@
 .config/oh-my-zsh
 .config/openplayground
 
+# Exclude config dirs that will have symlinks created.
+.cursor
+
 # Catch all...
 # *
 # !.code_profiles
