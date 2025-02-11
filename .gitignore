@@ -50,6 +50,7 @@
 .yarn
 .zcompdump*
 .zsh_history
+.Trash
 Library
 Desktop
 Development
