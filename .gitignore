@@ -9,6 +9,10 @@
 .cursor
 .hammerspoon
 
+# Exclude .config/cursor/extensions except for extensions.json
+.config/cursor/extensions/*
+!.config/cursor/extensions/extensions.json
+
 # Catch all...
 # *
 # !.code_profiles
