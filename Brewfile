@@ -3,6 +3,7 @@ tap "hashicorp/tap"
 tap "homebrew/bundle"
 tap "homebrew/services"
 tap "mongodb/brew"
+tap "nikitabobko/tap"
 # Search tool like grep, but optimized for programmers
 brew "ack"
 # Core application library for C
@@ -93,6 +94,8 @@ cask "slack"
 cask "tunnelblick"
 # Amethyst for auto window layouts.
 cask "amethyst"
+# Aerospace Tiling Manager
+cask "aerospace"
 # Cursor AI code editor.
 cask "cursor"
 # Visual Studio Code
