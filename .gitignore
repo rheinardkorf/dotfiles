@@ -7,6 +7,7 @@
 
 # Exclude config dirs that will have symlinks created.
 .cursor
+.hammerspoon
 
 # Catch all...
 # *
