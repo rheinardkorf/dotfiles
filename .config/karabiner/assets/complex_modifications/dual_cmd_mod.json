@@ -1,0 +1,122 @@
+{
+    "title": "Dual Command as Hyper (Shift+Control+Option+Command)",
+    "rules": [
+        {
+            "description": "Use Left+Right Command as Hyper key (⇧⌃⌥⌘)",
+            "manipulators": [
+                {
+                    "type": "basic",
+                    "from": {
+                        "key_code": "left_command",
+                        "modifiers": {
+                            "mandatory": ["right_command"]
+                        }
+                    },
+                    "to": [
+                        {
+                            "set_variable": {
+                                "name": "dual_command_hyper",
+                                "value": 1
+                            }
+                        }
+                    ],
+                    "to_after_key_up": [
+                        {
+                            "set_variable": {
+                                "name": "dual_command_hyper",
+                                "value": 0
+                            }
+                        }
+                    ],
+                    "conditions": [
+                        {
+                            "type": "device_if",
+                            "identifiers": [
+                                {
+                                    "is_keyboard": true,
+                                    "is_pointing_device": false,
+                                    "product_id": 0,
+                                    "vendor_id": 0
+                                }
+                            ]
+                        }
+                    ]
+                },
+                {
+                    "type": "basic",
+                    "from": {
+                        "key_code": "right_command",
+                        "modifiers": {
+                            "mandatory": ["left_command"]
+                        }
+                    },
+                    "to": [
+                        {
+                            "set_variable": {
+                                "name": "dual_command_hyper",
+                                "value": 1
+                            }
+                        }
+                    ],
+                    "to_after_key_up": [
+                        {
+                            "set_variable": {
+                                "name": "dual_command_hyper",
+                                "value": 0
+                            }
+                        }
+                    ],
+                    "conditions": [
+                        {
+                            "type": "device_if",
+                            "identifiers": [
+                                {
+                                    "is_keyboard": true,
+                                    "is_pointing_device": false,
+                                    "product_id": 0,
+                                    "vendor_id": 0
+                                }
+                            ]
+                        }
+                    ]
+                },
+                {
+                    "type": "basic",
+                    "conditions": [
+                        {
+                            "type": "variable_if",
+                            "name": "dual_command_hyper",
+                            "value": 1
+                        }
+                    ],
+                    "from": {
+                        "any": "key_code"
+                    },
+                    "to": [
+                        {
+                            "modifiers": [
+                                "left_shift",
+                                "left_control",
+                                "left_option",
+                                "left_command"
+                            ]
+                        }
+                    ],
+                    "conditions": [
+                        {
+                            "type": "device_if",
+                            "identifiers": [
+                                {
+                                    "is_keyboard": true,
+                                    "is_pointing_device": false,
+                                    "product_id": 0,
+                                    "vendor_id": 0
+                                }
+                            ]
+                        }
+                    ]
+                }
+            ]
+        }
+    ]
+}
