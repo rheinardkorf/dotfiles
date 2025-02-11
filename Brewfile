@@ -73,8 +73,8 @@ cask "iterm2"
 # 1-Password
 cask "1password"
 cask "1password-cli"
-# Alacritty terminal
-cask "alacritty"
+# Ghostty terminal
+cask "ghostty@tip"
 # Brave Browser
 cask "brave-browser"
 # Chrome Browser
