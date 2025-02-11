@@ -17,7 +17,9 @@
 # !.zshrc
 # !.scripts
 # !.espanso
-#
+
+# Histories
+history.txt
 
 # Annoying system things...
 .CFUserTextEncoding
