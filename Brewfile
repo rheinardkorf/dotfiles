@@ -4,6 +4,9 @@ tap "homebrew/bundle"
 tap "homebrew/services"
 tap "mongodb/brew"
 tap "nikitabobko/tap"
+tap "FelixKratz/formulae"
+# Janky Borders
+brew "felixkratz/formulae/borders"
 # Search tool like grep, but optimized for programmers
 brew "ack"
 # Core application library for C
