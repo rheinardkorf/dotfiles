@@ -1,0 +1,54 @@
+#!/bin/bash
+
+source "$CONFIG_DIR/colors.sh"
+
+PLUGIN_DIR="$CONFIG_DIR/plugins"
+ITEM_DIR="$CONFIG_DIR/items"
+
+sketchybar --bar height=24        \
+                 blur_radius=30   \
+                 position=top     \
+                 sticky=off       \
+                 padding_left=0  \
+                 padding_right=0 \
+                 color=$BAR_COLOR
+
+default=(
+  padding_left=5
+  padding_right=5
+  icon.font="Hack Nerd Font:Bold:12.0"
+  icon.color=$WHITE
+  icon.padding_left=4
+  icon.padding_right=2
+  label.font="Hack Nerd Font:Bold:12.0"
+  label.color=$WHITE
+  label.padding_left=4
+  label.padding_right=4
+  background.color=$ITEM_BG_COLOR
+  background.corner_radius=5
+  background.height=20
+)
+sketchybar --default "${default[@]}"
+
+# -- Events --
+sketchybar --add event aerospace_workspace_change
+
+# -- Left Items --
+source $ITEM_DIR/hostname.sh
+source $ITEM_DIR/aerospace.sh
+source $ITEM_DIR/front_app.sh
+
+# -- Right of Notch Items --
+
+
+# -- Right Items
+source $ITEM_DIR/calendar.sh
+source $ITEM_DIR/battery.sh
+source $ITEM_DIR/volume.sh
+source $ITEM_DIR/cpu.sh
+source $ITEM_DIR/gpu.sh
+source $ITEM_DIR/ping.sh
+
+
+##### Force all scripts to run the first time (never do this in a script) #####
+sketchybar --update
