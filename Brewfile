@@ -7,6 +7,8 @@ tap "nikitabobko/tap"
 tap "FelixKratz/formulae"
 # Janky Borders
 brew "felixkratz/formulae/borders"
+# Sketchybar
+brew "felixkratz/formulae/sketchybar"
 # Search tool like grep, but optimized for programmers
 brew "ack"
 # Core application library for C
@@ -64,6 +66,10 @@ brew "nvm"
 # FD / FZF
 brew "fzf"
 brew "fd"
+# SF Pro Font
+# cask "font-sf-pro"
+# SF Pro Symbols
+# cask "sf-symbols"
 # App to build and share containerized applications and microservices
 cask "docker"
 # Cross-platform Text Expander written in Rust
@@ -96,7 +102,7 @@ cask "slack"
 # Tunnelblick VPN tool.
 cask "tunnelblick"
 # Amethyst for auto window layouts.
-cask "amethyst"
+# cask "amethyst"
 # Aerospace Tiling Manager
 cask "aerospace"
 # Cursor AI code editor.
@@ -109,3 +115,7 @@ cask "hammerspoon"
 cask "hiddenbar"
 # AlDente - remove this if you have Pro
 cask "aldente"
+# Ollama
+cask "ollama"
+# Sketchybar App Font
+cask "font-sketchybar-app-font"

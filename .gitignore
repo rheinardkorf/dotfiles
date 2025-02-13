@@ -33,6 +33,7 @@ history.txt
 .viminfo
 
 # Things to avoid...
+.ollama/
 .aws/*
 .aws-sam/*
 .ssh
