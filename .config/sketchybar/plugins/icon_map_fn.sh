@@ -205,6 +205,9 @@ function icon_map() {
   "MAMP" | "MAMP PRO")
     icon_result=":mamp:"
     ;;
+  "Microsoft Outlook")
+    icon_result=":microsoft_outlook:"
+    ;;
   "Canary Mail" | "HEY" | "Mail" | "Mailspring" | "MailMate" | "邮件")
     icon_result=":mail:"
     ;;

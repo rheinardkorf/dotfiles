@@ -21,7 +21,8 @@ case "$EVENT_NAME" in
     fi
     ;;
 "aerospace_window_change" | "routine")
-    # Delete existing window items
+    
+    # Delete windows that are no longer in Aerospace
     for window in $MISSING_WINDOWS; do
         sketchybar --remove "$window"
     done
@@ -33,11 +34,6 @@ case "$EVENT_NAME" in
     #         "window-id": 1,
     #         "window-title": "Window 1",
     #         "app-name": "App 1"
-    #     },
-    #     {
-    #         "window-id": 2,
-    #         "window-title": "Window 2",
-    #         "app-name": "App 2"
     #     }
     # ]
     WINDOWS=$(aerospace list-windows --json --workspace $WORKSPACE)
@@ -70,16 +66,16 @@ case "$EVENT_NAME" in
                 window_ids="$window_ids window.$window_id"
             fi
 
-            sketchybar --remove window.$window_id
             sketchybar --add item window.$window_id left \
                 --set window.$window_id \
-                background.color=0x00000000 \
                 icon=$($CONFIG_DIR/plugins/icon_map_fn.sh "$app_name") \
                 icon.font="sketchybar-app-font:Regular:12.0" \
                 icon.padding_left=0 \
                 icon.padding_right=0 \
-                label.padding_left=5 \
-                label.padding_right=5 \
+                label.padding_left=0 \
+                label.padding_right=0 \
+                icon.color=$WHITE_TRANSPARENT \
+                background.color=0x00000000 \
                 background.padding_left=0 \
                 background.padding_right=0 \
                 click_script="aerospace workspace $WORKSPACE"
@@ -89,8 +85,10 @@ case "$EVENT_NAME" in
     done < <(echo "$WINDOWS" | jq -c '.[]')
 
     # Add logic to update window icons
+    source "$CONFIG_DIR/plugins/aerospace_arrange.sh"
     ;;
 *)
     echo "Unknown event: $EVENT_NAME"
     ;;
 esac
+
