@@ -4,8 +4,8 @@ export WHITE=0xffffffff
 export WHITE_TRANSPARENT=0xd0ffffff
 
 # -- Rheinard Scheme --
-export BAR_COLOR=0x80101314
-export ITEM_BG_COLOR=0x80353c3f
+export BAR_COLOR=0xd0101314
+export ITEM_BG_COLOR=0xd0353c3f
 export ACCENT_COLOR=0xaa394671
 export ACTIVE_COLOR=0xff6c7db5
 export INACTIVE_COLOR=0xc0353c3f
