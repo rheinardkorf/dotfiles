@@ -32,6 +32,7 @@ sketchybar --default "${default[@]}"
 
 # -- Events --
 sketchybar --add event aerospace_workspace_change
+sketchybar --add event aerospace_window_change
 
 # -- Left Items --
 source $ITEM_DIR/hostname.sh

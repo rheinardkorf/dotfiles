@@ -42,55 +42,12 @@ hs.hotkey.bind(meh, "d", function()
     hs.application.launchOrFocus("Visual Studio Code")
 end)
 
-hs.hotkey.bind(meh, "Right", function()
-    hs.spaces.MCwaitTime = 0.3 
-
-    -- Get the current space ID
-    local currentSpace = hs.spaces.focusedSpace()
-    -- Get the screen containing the focused space
-    local screen = hs.spaces.spaceDisplay(currentSpace)
-    -- Get all spaces for this screen
-    local spaces = hs.spaces.spacesForScreen(screen)
-    
-    -- Find current space index
-    local currentIdx = 0
-    for idx, space in ipairs(spaces) do
-        if space == currentSpace then
-            currentIdx = idx
-            break
-        end
-    end
-    
-    -- Calculate next space index (with wraparound)
-    local nextIdx = currentIdx % #spaces + 1
-    -- Exit mission control if it's active
-    hs.eventtap.keyStroke({}, "escape")
-    -- Go to next space
-    hs.spaces.gotoSpace(spaces[nextIdx])
+-- Let Sketchybar know when window states have changed.
+hs.window.filter.default:subscribe(hs.window.filter.windowCreated, function(win)
+    hs.execute('sketchybar --trigger aerospace_window_change',true)
 end)
 
--- Bind ultra + Left Arrow to switch to previous Space
-hs.hotkey.bind(meh, "Left", function()
-    -- Get the current space ID
-    local currentSpace = hs.spaces.focusedSpace()
-    -- Get the screen containing the focused space
-    local screen = hs.spaces.spaceDisplay(currentSpace)
-    -- Get all spaces for this screen
-    local spaces = hs.spaces.spacesForScreen(screen)
-    
-    -- Find current space index
-    local currentIdx = 0
-    for idx, space in ipairs(spaces) do
-        if space == currentSpace then
-            currentIdx = idx
-            break
-        end
-    end
-    
-    -- Calculate previous space index (with wraparound)
-    local prevIdx = (currentIdx - 2) % #spaces + 1
-    -- Exit mission control if it's active
-    hs.eventtap.keyStroke({}, "escape")
-    -- Go to previous space
-    hs.spaces.gotoSpace(spaces[prevIdx])
+hs.window.filter.default:subscribe(hs.window.filter.windowDestroyed, function(win)
+    hs.execute('sketchybar --trigger aerospace_window_change',true)
 end)
+
