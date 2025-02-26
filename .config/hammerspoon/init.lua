@@ -51,3 +51,15 @@ hs.window.filter.default:subscribe(hs.window.filter.windowDestroyed, function(wi
     hs.execute('sketchybar --trigger aerospace_window_change',true)
 end)
 
+-- Get the current window app id
+hs.hotkey.bind(hyper, "i", function()
+    local app = hs.window.focusedWindow():application()
+    if app then
+        local bundleID = app:bundleID()
+        local windowTitle = hs.window.focusedWindow():title()
+        local appName = app:name()
+        hs.alert.show(appName .. " (" .. bundleID .. ")")
+    else
+        hs.alert.show("No active window")
+    end
+end)

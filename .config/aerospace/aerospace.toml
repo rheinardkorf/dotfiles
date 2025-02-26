@@ -65,6 +65,9 @@ cmd-alt-ctrl-shift-5 = 'workspace 5'
 cmd-alt-ctrl-shift-6 = 'workspace 6'
 cmd-alt-ctrl-shift-7 = 'workspace 7'
 cmd-alt-ctrl-shift-8 = 'workspace 8'
+cmd-alt-ctrl-shift-h = 'workspace prev'
+cmd-alt-ctrl-shift-l = 'workspace next'
+cmd-alt-ctrl-shift-n = 'layout floating tiling'
 
 # Move window to workspace using meh + number
 ctrl-shift-alt-1 = 'move-node-to-workspace 1'
@@ -121,4 +124,20 @@ shift-down = ['volume set 0', 'mode main']
     7 = 2
     8 = 2
 
-# Float these apps
+# App specific config
+
+[[on-window-detected]]
+    if.app-name-regex-substring = 'Brave Browser'
+    run = ['move-node-to-workspace 1']
+
+[[on-window-detected]]
+    if.app-id = 'com.mitchellh.ghostty'
+    run = ['move-node-to-workspace 2']
+
+[[on-window-detected]]
+    if.app-name-regex-substring = 'Cursor'
+    run = ['move-node-to-workspace 3']
+
+[[on-window-detected]]
+    if.app-name-regex-substring = 'Slack'
+    run = ['move-node-to-workspace 4']
