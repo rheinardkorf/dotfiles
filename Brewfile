@@ -66,6 +66,8 @@ brew "nvm"
 # FD / FZF
 brew "fzf"
 brew "fd"
+# Podman
+brew "podman"
 # SF Pro Font
 # cask "font-sf-pro"
 # SF Pro Symbols
@@ -119,3 +121,6 @@ cask "aldente"
 cask "ollama"
 # Sketchybar App Font
 cask "font-sketchybar-app-font"
+# Podman Desktop
+cask "podman-desktop"
+
