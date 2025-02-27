@@ -63,3 +63,34 @@ hs.hotkey.bind(hyper, "i", function()
         hs.alert.show("No active window")
     end
 end)
+
+local mqtt_host = os.getenv("MQTT_HOST") or "homeassistant.local"
+local mqtt_user = os.getenv("MQTT_USER") or "default_user"
+local mqtt_pass = os.getenv("MQTT_PASS") or "default_pass"
+local mac_hostname = hs.host.localizedName()
+local mqtt_topic = "office/" .. mac_hostname .. "/camera"
+
+local lastCameraState = "OFF"
+local statusFile = os.getenv("HOME") .. "/.camera_status"
+
+function checkCameraStatus()
+    local file = io.open(statusFile, "r")
+    if not file then return end
+    local status = file:read("*all"):gsub("%s+", "")
+    file:close()
+
+    if status == "ON" and lastCameraState ~= "ON" then
+        lastCameraState = "ON"
+        --hs.execute("mosquitto_pub -h " .. mqtt_host .. " -u " .. mqtt_user .. " -P " .. mqtt_pass .. " -t " .. mqtt_topic .. " -m 'Camera ON'")
+        hs.alert.show("Camera is ON (" .. mac_hostname .. ")")
+    elseif status == "OFF" and lastCameraState ~= "OFF" then
+        lastCameraState = "OFF"
+        --hs.execute("mosquitto_pub -h " .. mqtt_host .. " -u " .. mqtt_user .. " -P " .. mqtt_pass .. " -t " .. mqtt_topic .. " -m 'Camera OFF'")
+        hs.alert.show("Camera is OFF (" .. mac_hostname .. ")")
+    end
+end
+
+-- Run this check every 5 seconds
+cameraTimer = hs.timer.doEvery(5, checkCameraStatus)
+
+

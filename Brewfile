@@ -66,6 +66,8 @@ brew "nvm"
 # FD / FZF
 brew "fzf"
 brew "fd"
+# Mosquitto for MQTT publishing
+brew "mosquitto"
 # Podman
 brew "podman"
 # SF Pro Font

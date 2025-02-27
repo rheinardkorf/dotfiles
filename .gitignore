@@ -33,6 +33,9 @@ history.txt
 .viminfo
 
 # Things to avoid...
+.camera_status
+.yarnrc
+.redhat
 .ollama/
 .aws/*
 .aws-sam/*
