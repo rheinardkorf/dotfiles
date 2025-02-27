@@ -2,6 +2,8 @@
 
 export WHITE=0xffffffff
 export WHITE_TRANSPARENT=0xd0ffffff
+export GREEN_ICON=0xff9dd274
+export RED_ICON=0xffff6578
 
 # -- Rheinard Scheme --
 export BAR_COLOR=0xd0101314
