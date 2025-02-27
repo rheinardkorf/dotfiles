@@ -64,33 +64,53 @@ hs.hotkey.bind(hyper, "i", function()
     end
 end)
 
-local mqtt_host = os.getenv("MQTT_HOST") or "homeassistant.local"
-local mqtt_user = os.getenv("MQTT_USER") or "default_user"
-local mqtt_pass = os.getenv("MQTT_PASS") or "default_pass"
+-- Retrieve environment variables from ~/.env
+function getEnvVar(var)
+    local envFile = os.getenv("HOME") .. "/.env"
+    local cmd = "grep '^" .. var .. "=' " .. envFile .. " | cut -d '=' -f2-"
+    local result, success, exit_type, rc = hs.execute(cmd, true)
+
+    if rc == 0 and result and result ~= "" then
+        return result:gsub("%s+", "") -- Trim spaces
+    else
+        return "MISSING"
+    end
+end
+
+-- Load MQTT credentials from ~/.env
+local mqtt_host = getEnvVar("MQTT_HOST")
+local mqtt_user = getEnvVar("MQTT_USER")
+local mqtt_pass = getEnvVar("MQTT_PASS")
+
+-- Get the mosquitto_pub path dynamically
+local mosquitto_pub = hs.execute("which mosquitto_pub", true):gsub("%s+", "")
+
+-- Device and topic setup
 local mac_hostname = hs.host.localizedName()
 local mqtt_topic = "office/" .. mac_hostname .. "/camera"
-
 local lastCameraState = "OFF"
 local statusFile = os.getenv("HOME") .. "/.camera_status"
 
+-- Function to check camera status and publish MQTT message
 function checkCameraStatus()
+    if mosquitto_pub == "" then
+        print("⚠️ ERROR: mosquitto_pub not found!")
+        return
+    end
+
     local file = io.open(statusFile, "r")
-    if not file then return end
-    local status = file:read("*all"):gsub("%s+", "")
+    if not file then return end  -- Exit if file doesn't exist
+    local status = file:read("*all"):gsub("%s+", "")  -- Read and trim whitespace
     file:close()
 
     if status == "ON" and lastCameraState ~= "ON" then
         lastCameraState = "ON"
-        --hs.execute("mosquitto_pub -h " .. mqtt_host .. " -u " .. mqtt_user .. " -P " .. mqtt_pass .. " -t " .. mqtt_topic .. " -m 'Camera ON'")
-        hs.alert.show("Camera is ON (" .. mac_hostname .. ")")
+        hs.execute(mosquitto_pub .. " -h " .. mqtt_host .. " -u " .. mqtt_user .. " -P " .. mqtt_pass .. " -t " .. mqtt_topic .. " -m 'ON'")
     elseif status == "OFF" and lastCameraState ~= "OFF" then
         lastCameraState = "OFF"
-        --hs.execute("mosquitto_pub -h " .. mqtt_host .. " -u " .. mqtt_user .. " -P " .. mqtt_pass .. " -t " .. mqtt_topic .. " -m 'Camera OFF'")
-        hs.alert.show("Camera is OFF (" .. mac_hostname .. ")")
+        hs.execute(mosquitto_pub .. " -h " .. mqtt_host .. " -u " .. mqtt_user .. " -P " .. mqtt_pass .. " -t " .. mqtt_topic .. " -m 'OFF'")
     end
 end
 
 -- Run this check every 5 seconds
 cameraTimer = hs.timer.doEvery(5, checkCameraStatus)
-
-

@@ -33,6 +33,7 @@ history.txt
 .viminfo
 
 # Things to avoid...
+.env
 .camera_status
 .yarnrc
 .redhat
