@@ -87,30 +87,50 @@ local mosquitto_pub = hs.execute("which mosquitto_pub", true):gsub("%s+", "")
 
 -- Device and topic setup
 local mac_hostname = hs.host.localizedName()
-local mqtt_topic = "office/" .. mac_hostname .. "/camera"
+-- Camera topic
+local mqtt_camera_topic = "office/" .. mac_hostname .. "/camera"
 local lastCameraState = "OFF"
-local statusFile = os.getenv("HOME") .. "/.camera_status"
+local cameraStatusFile = os.getenv("HOME") .. "/.camera_status"
+-- Microphone topic
+local mqtt_microphone_topic = "office/" .. mac_hostname .. "/microphone"
+local lastMicrophoneState = "OFF"
+local microphoneStatusFile = os.getenv("HOME") .. "/.mic_status"
 
 -- Function to check camera status and publish MQTT message
-function checkCameraStatus()
+function checkCameraAndMicrophoneStatus()
     if mosquitto_pub == "" then
         print("⚠️ ERROR: mosquitto_pub not found!")
         return
     end
 
-    local file = io.open(statusFile, "r")
+    -- Check camera status
+    local file = io.open(cameraStatusFile, "r")
     if not file then return end  -- Exit if file doesn't exist
-    local status = file:read("*all"):gsub("%s+", "")  -- Read and trim whitespace
+    local cameraStatus = file:read("*all"):gsub("%s+", "")  -- Read and trim whitespace
     file:close()
 
-    if status == "ON" and lastCameraState ~= "ON" then
+    if cameraStatus == "ON" and lastCameraState ~= "ON" then
         lastCameraState = "ON"
-        hs.execute(mosquitto_pub .. " -h " .. mqtt_host .. " -u " .. mqtt_user .. " -P " .. mqtt_pass .. " -t " .. mqtt_topic .. " -m 'ON'")
-    elseif status == "OFF" and lastCameraState ~= "OFF" then
+        hs.execute(mosquitto_pub .. " -h " .. mqtt_host .. " -u " .. mqtt_user .. " -P " .. mqtt_pass .. " -t " .. mqtt_camera_topic .. " -m 'ON'")
+    elseif cameraStatus == "OFF" and lastCameraState ~= "OFF" then
         lastCameraState = "OFF"
-        hs.execute(mosquitto_pub .. " -h " .. mqtt_host .. " -u " .. mqtt_user .. " -P " .. mqtt_pass .. " -t " .. mqtt_topic .. " -m 'OFF'")
+        hs.execute(mosquitto_pub .. " -h " .. mqtt_host .. " -u " .. mqtt_user .. " -P " .. mqtt_pass .. " -t " .. mqtt_camera_topic .. " -m 'OFF'")
+    end
+
+    -- Check microphone status
+    local file = io.open(microphoneStatusFile, "r")
+    if not file then return end  -- Exit if file doesn't exist
+    local microphoneStatus = file:read("*all"):gsub("%s+", "")  -- Read and trim whitespace
+    file:close()
+
+    if microphoneStatus == "ON" and lastMicrophoneState ~= "ON" then
+        lastMicrophoneState = "ON"
+        hs.execute(mosquitto_pub .. " -h " .. mqtt_host .. " -u " .. mqtt_user .. " -P " .. mqtt_pass .. " -t " .. mqtt_microphone_topic .. " -m 'ON'")
+    elseif microphoneStatus == "OFF" and lastMicrophoneState ~= "OFF" then
+        lastMicrophoneState = "OFF"
+        hs.execute(mosquitto_pub .. " -h " .. mqtt_host .. " -u " .. mqtt_user .. " -P " .. mqtt_pass .. " -t " .. mqtt_microphone_topic .. " -m 'OFF'")
     end
 end
 
 -- Run this check every 5 seconds
-cameraTimer = hs.timer.doEvery(5, checkCameraStatus)
+cameraAndMicrophoneTimer = hs.timer.doEvery(5, checkCameraAndMicrophoneStatus)
