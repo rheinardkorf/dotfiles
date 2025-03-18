@@ -41,6 +41,7 @@ source $ITEM_DIR/front_app.sh
 
 # -- Right of Notch Items --
 source $ITEM_DIR/camera_status.sh
+source $ITEM_DIR/mic_status.sh
 
 
 # -- Right Items
