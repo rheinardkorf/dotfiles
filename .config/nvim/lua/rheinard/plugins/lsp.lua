@@ -6,7 +6,7 @@ return {
         config = false,
         dependencies = {
             { 'williamboman/mason.nvim', },
-            { 'williamboman/mason-lspconfig.nvim' },
+            -- Remove mason-lspconfig from here to fix loading order
         },
         init = function()
             -- Disable automatic setup, we are doing it manually
@@ -93,7 +93,7 @@ return {
                 --     -- { name = 'vsnip' }, -- For vsnip users.
                 --     { name = 'luasnip',  dup = 0 }, -- For luasnip users.
                 --     -- { name = 'ultisnips' }, -- For ultisnips users.
-                --     -- { name = 'snippy' }, -- For snippy users.
+                --     -- { name = 'snippy' }, -- For vsnip users.
                 -- }, {
                 --     { name = 'buffer' },
                 -- }),
@@ -124,6 +124,8 @@ return {
         event = { 'BufReadPre', 'BufNewFile' },
         dependencies = {
             { 'hrsh7th/cmp-nvim-lsp' },
+            { 'williamboman/mason.nvim' },
+            -- Removed mason-lspconfig to fix loading order issues
         },
         config = function()
             -- This is where all the LSP shenanigans will live
@@ -150,79 +152,78 @@ return {
                 vim.keymap.set("i", "<C-h>", function() vim.lsp.buf.signature_help() end, opts)
             end)
 
-            lsp_zero.format_on_save({
-                format_opts = {
-                    async = false,
-                    timeout_ms = 10000,
-                },
-                servers = {
-                    -- ['tsserver'] = { 'javascript', 'typescript' },
-                    -- ['rust_analyzer'] = { 'rust' },
-                    ['gopls'] = { 'go' },
-                },
-            })
+            -- Format on save is now handled by conform.nvim
+            -- lsp_zero.format_on_save({
+            --     format_opts = {
+            --         async = false,
+            --         timeout_ms = 10000,
+            --     },
+            --     servers = {
+            --         -- ['tsserver'] = { 'javascript', 'typescript' },
+            --         -- ['rust_analyzer'] = { 'rust' },
+            --         ['gopls'] = { 'go' },
+            --     },
+            -- })
 
             local lspconfig = require('lspconfig')
 
             lspconfig.lua_ls.setup(lsp_zero.nvim_lua_ls())
-            lspconfig.htmx.setup({ filetypes = { 'html', 'htmx', 'ejs'}})
+            
+            -- Configure individual LSP servers
+            lspconfig.gopls.setup({
+                settings = {
+                    gopls = {
+                        completeUnimported = true,
+                        usePlaceholders = true,
+                        analyses = {
+                            unusedparams = true,
+                        },
+                        staticcheck = true,
+                        gofumpt = true,
+                    },
+                },
+            })
 
+            lspconfig.ts_ls.setup({
+                settings = {
+                    implicitProjectConfiguration = {
+                        checkJs = true
+                    },
+                },
+            })
+
+            lspconfig.emmet_ls.setup({
+                filetypes = { 'html', 'typescriptreact', 'javascriptreact', 'css', 'sass', 'scss', 'less', 'ejs'}
+            })
+
+            lspconfig.htmx.setup({
+                filetypes = { 'html', 'htmx', 'ejs'}
+            })
+
+            -- Add TOML LSP server
+            lspconfig.taplo.setup({
+                settings = {
+                    evenBetterToml = {
+                        formatter = {
+                            alignEntries = false,
+                            alignComments = false,
+                            compactArrays = false,
+                            compactInlineTables = false,
+                            indentEntries = true,
+                            indentTables = true,
+                            reorderArrays = false,
+                            reorderTables = false,
+                            columnWidth = 80,
+                            columnAlignment = false,
+                            compactArrays = false,
+                        },
+                    },
+                },
+            })
+
+            -- Let mason handle the rest automatically
             require('mason').setup({})
-
-            require("mason-lspconfig").setup_handlers {
-                function(server_name) -- default handler (optional)
-                    require("lspconfig")[server_name].setup {}
-                end,
-                ["lua_ls"] = function()
-                    lspconfig.lua_ls.setup {
-                        settings = {
-                            Lua = {
-                                diagnostics = {
-                                    -- Get the language server to recognize the `vim` global
-                                    globals = {
-                                        'vim',
-                                        'require'
-                                    },
-                                },
-                            },
-                        },
-                    }
-                end,
-                ["gopls"] = function()
-                    lspconfig.gopls.setup({
-                        settings = {
-                            gopls = {
-                                completeUnimported = true,
-                                usePlaceholders = true,
-                                analyses = {
-                                    unusedparams = true,
-                                },
-                                staticcheck = true,
-                                gofumpt = true,
-                            },
-                        },
-                    })
-                end,
-                ["tsserver"] = function()
-                    lspconfig.tsserver.setup({
-                        settings = {
-                            implicitProjectConfiguration = {
-                                checkJs = true
-                            },
-                        },
-                    })
-                end,
-                ["emmet_ls"] = function()
-                    lspconfig.emmet_ls.setup({
-                        filetypes = { 'html', 'typescriptreact', 'javascriptreact', 'ess', 'sass', 'scss', 'less', 'ejs'}
-                    })
-                end,
-                -- ["htmx"] = function()
-                    -- lspconfig.htmx.setup()
-                --         filetypes = { 'html', 'htmx', 'ejs'}
-                --     })
-                -- end
-            }
+            -- Removed mason-lspconfig setup to fix loading order issues
         end
     }
 }

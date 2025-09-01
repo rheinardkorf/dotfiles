@@ -14,6 +14,9 @@ keymap.set("n", "<leader>se", "<C-w>j")
 keymap.set("n", "<leader>si", "<C-w>k")
 keymap.set("n", "<leader>so", "<C-w>l")
 
+-- Line actions
+keymap.set("n", "<Leader>o", "i<CR><Esc>", { desc = "Insert newline below cursor" })
+
 -- Buffer actions
 keymap.set("n", "<leader>bb", ":b#<CR>")  -- toggle previous buffer
 keymap.set("n", "<leader>bp", ":bp<CR>")  -- previous buffer

@@ -11,23 +11,11 @@ return {
                     package_uninstalled = "✗",
                 },
             },
+            -- Ensure TOML tools are available
+            ensure_installed = {
+                "taplo", -- TOML language server and formatter
+            },
         },
     },
-    {
-        "williamboman/mason-lspconfig.nvim",
-        opts = {
-            ensure_installed = {
-                "rust_analyzer",
-                "eslint",
-                "tsserver",
-                "quick_lint_js",
-                "gopls",
-            },
-
-            automatic_installation = true,
-
-        },
-        event = "BufReadPre",
-        dependencies = "williamboman/mason.nvim",
-    }
+    -- Removed mason-lspconfig to fix loading order issues
 }
