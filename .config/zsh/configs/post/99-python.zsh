@@ -1,1 +1,1 @@
-alias python="python3.10"
+# alias python="python3.10"

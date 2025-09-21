@@ -6,7 +6,7 @@ return {
         config = false,
         dependencies = {
             { 'williamboman/mason.nvim', },
-            -- Remove mason-lspconfig from here to fix loading order
+            { 'williamboman/mason-lspconfig.nvim', },
         },
         init = function()
             -- Disable automatic setup, we are doing it manually
@@ -64,55 +64,51 @@ return {
                             buffer = 1,
                             path = 1,
                             nvim_lsp = 0,
-                            lusnip = 0,
+                            luasnip = 0,
                         })[entry.source.name] or 0
                         return vim_item
                     end
                 },
+                -- Modern experimental features
+                experimental = {
+                    ghost_text = {
+                        hl_group = "CmpGhostText",
+                    },
+                },
                 mapping = cmp.mapping.preset.insert({
                     ['<C-Space>'] = cmp.mapping.complete(),
-                    -- ['<C-u>'] = cmp.mapping.scroll_docs(-4),
-                    -- ['<C-d>'] = cmp.mapping.scroll_docs(4),
-                    -- ['<C-f>'] = cmp_action.luasnip_jump_forward(),
-                    -- ['<C-b>'] = cmp_action.luasnip_jump_backward(),
+                    ['<C-u>'] = cmp.mapping.scroll_docs(-4),
+                    ['<C-d>'] = cmp.mapping.scroll_docs(4),
+                    ['<C-f>'] = cmp.mapping(cmp.mapping.scroll_docs(4), { 'i', 'c' }),
+                    ['<C-b>'] = cmp.mapping(cmp.mapping.scroll_docs(-4), { 'i', 'c' }),
                     ['<C-p>'] = cmp.mapping.select_prev_item(cmp_select),
                     ['<C-n>'] = cmp.mapping.select_next_item(cmp_select),
                     ['<C-y>'] = cmp.mapping.confirm({ select = true }),
+                    ['<C-e>'] = cmp.mapping.abort(),
                 }),
                 snippet = {
                     -- REQUIRED - you must specify a snippet engine
                     expand = function(args)
-                        -- vim.fn["vsnip#anonymous"](args.body) -- For `vsnip` users.
-                        require('luasnip').lsp_expand(args.body) -- For `luasnip` users.
-                        -- require('snippy').expand_snippet(args.body) -- For `snippy` users.
-                        -- vim.fn["UltiSnips#Anon"](args.body) -- For `ultisnips` users.
+                        require('luasnip').lsp_expand(args.body)
                     end,
                 },
-                -- sources = cmp.config.sources({
-                --     { name = 'nvim_lsp', dup = 0 },
-                --     -- { name = 'vsnip' }, -- For vsnip users.
-                --     { name = 'luasnip',  dup = 0 }, -- For luasnip users.
-                --     -- { name = 'ultisnips' }, -- For ultisnips users.
-                --     -- { name = 'snippy' }, -- For vsnip users.
-                -- }, {
-                --     { name = 'buffer' },
-                -- }),
-                sources = {
-                    {
-                        name = 'buffer',
-                        option = {
-                            get_bufnrs = function()
-                                local bufs = {}
-                                for _, win in ipairs(vim.api.nvim_list_wins()) do
-                                    bufs[vim.api.nvim_win_get_buf(win)] = true
-                                end
-                                return vim.tbl_keys(bufs)
-                            end
-                        }
-                    },
-                    { name = 'nvim_lsp' },
-                    { name = 'luasnip' },
-                    { name = 'path' },
+                -- Modern source configuration with proper priority
+                sources = cmp.config.sources({
+                    { name = 'nvim_lsp', priority = 1000 },
+                    { name = 'luasnip', priority = 750 },
+                }, {
+                    { name = 'buffer', priority = 500 },
+                    { name = 'path', priority = 250 },
+                }),
+                -- Modern completion behavior
+                completion = {
+                    completeopt = 'menu,menuone,noinsert',
+                },
+                -- Performance optimizations
+                performance = {
+                    debounce = 60,
+                    throttle = 30,
+                    fetching_timeout = 500,
                 },
             })
         end
@@ -125,14 +121,36 @@ return {
         dependencies = {
             { 'hrsh7th/cmp-nvim-lsp' },
             { 'williamboman/mason.nvim' },
-            -- Removed mason-lspconfig to fix loading order issues
+            { 'williamboman/mason-lspconfig.nvim' },
         },
         config = function()
             -- This is where all the LSP shenanigans will live
             local lsp_zero = require('lsp-zero')
             lsp_zero.extend_lspconfig()
 
-            lsp_zero.on_attach(function(_, bufnr)
+            -- Modern diagnostics configuration
+            vim.diagnostic.config({
+                virtual_text = false,
+                signs = true,
+                update_in_insert = false,
+                underline = true,
+                severity_sort = true,
+                float = {
+                    border = 'rounded',
+                    source = 'always',
+                    header = '',
+                    prefix = '',
+                },
+            })
+
+            -- Define signs for diagnostics
+            local signs = { Error = "󰅚 ", Warn = "󰀪 ", Hint = "󰌶 ", Info = "󰋽 " }
+            for type, icon in pairs(signs) do
+                local hl = "DiagnosticSign" .. type
+                vim.fn.sign_define(hl, { text = icon, texthl = hl, numhl = hl })
+            end
+
+            lsp_zero.on_attach(function(client, bufnr)
                 -- see :help lsp-zero-keybinding
                 -- to learn the available actions
                 lsp_zero.default_keymaps({ buffer = bufnr })
@@ -141,6 +159,8 @@ return {
 
                 vim.keymap.set("n", "gd", function() vim.lsp.buf.definition() end, opts)
                 vim.keymap.set("n", "I", function() vim.lsp.buf.hover() end, opts)
+                vim.keymap.set("n", "gi", function() vim.lsp.buf.implementation() end, opts)
+                vim.keymap.set("n", "gr", function() vim.lsp.buf.references() end, opts)
                 vim.keymap.set("n", "<leader>vws", function() vim.lsp.buf.workspace_symbol() end, opts)
                 vim.keymap.set("n", "<leader>vd", function() vim.diagnostic.open_float() end, opts)
                 vim.keymap.set("n", "<leader>vq", function() vim.diagnostic.setloclist() end, opts)
@@ -167,9 +187,21 @@ return {
 
             local lspconfig = require('lspconfig')
 
-            lspconfig.lua_ls.setup(lsp_zero.nvim_lua_ls())
-            
-            -- Configure individual LSP servers
+            -- Let mason-lspconfig handle the rest automatically
+            require('mason').setup({})
+            require("mason-lspconfig").setup({
+                ensure_installed = {
+                    "lua_ls",
+                    "gopls", 
+                    "ts_ls",
+                    "eslint",
+                    "emmet_ls",
+                    "htmx",
+                    "taplo",
+                },
+                automatic_installation = true,
+            })
+            -- Configure specific servers with modern settings
             lspconfig.gopls.setup({
                 settings = {
                     gopls = {
@@ -177,15 +209,47 @@ return {
                         usePlaceholders = true,
                         analyses = {
                             unusedparams = true,
+                            unusedwrite = true,
+                            fieldalignment = true,
                         },
                         staticcheck = true,
                         gofumpt = true,
+                        codelenses = {
+                            gc_details = true,
+                            generate = true,
+                            regenerate_cgo = true,
+                            tidy = true,
+                            upgrade_dependency = true,
+                            vendor = true,
+                        },
                     },
                 },
             })
 
             lspconfig.ts_ls.setup({
                 settings = {
+                    typescript = {
+                        inlayHints = {
+                            includeInlayParameterNameHints = 'all',
+                            includeInlayParameterNameHintsWhenArgumentMatchesName = false,
+                            includeInlayFunctionParameterTypeHints = true,
+                            includeInlayVariableTypeHints = true,
+                            includeInlayPropertyDeclarationTypeHints = true,
+                            includeInlayFunctionLikeReturnTypeHints = true,
+                            includeInlayEnumMemberValueHints = true,
+                        },
+                    },
+                    javascript = {
+                        inlayHints = {
+                            includeInlayParameterNameHints = 'all',
+                            includeInlayParameterNameHintsWhenArgumentMatchesName = false,
+                            includeInlayFunctionParameterTypeHints = true,
+                            includeInlayVariableTypeHints = true,
+                            includeInlayPropertyDeclarationTypeHints = true,
+                            includeInlayFunctionLikeReturnTypeHints = true,
+                            includeInlayEnumMemberValueHints = true,
+                        },
+                    },
                     implicitProjectConfiguration = {
                         checkJs = true
                     },
@@ -193,14 +257,33 @@ return {
             })
 
             lspconfig.emmet_ls.setup({
-                filetypes = { 'html', 'typescriptreact', 'javascriptreact', 'css', 'sass', 'scss', 'less', 'ejs'}
+                filetypes = { 'html', 'typescriptreact', 'javascriptreact', 'css', 'sass', 'scss', 'less', 'ejs'},
+                init_options = {
+                    html = {
+                        options = {
+                            ["bem.enabled"] = true,
+                        },
+                    },
+                },
+            })
+
+            lspconfig.eslint.setup({
+                filetypes = { 'javascript', 'javascriptreact', 'typescript', 'typescriptreact' },
+                settings = {
+                    codeActionOnSave = {
+                        enable = true,
+                        mode = "all",
+                    },
+                },
             })
 
             lspconfig.htmx.setup({
-                filetypes = { 'html', 'htmx', 'ejs'}
+                filetypes = { 'html', 'htmx', 'ejs'},
+                init_options = {
+                    customData = {},
+                },
             })
 
-            -- Add TOML LSP server
             lspconfig.taplo.setup({
                 settings = {
                     evenBetterToml = {
@@ -215,15 +298,13 @@ return {
                             reorderTables = false,
                             columnWidth = 80,
                             columnAlignment = false,
-                            compactArrays = false,
                         },
                     },
                 },
             })
 
-            -- Let mason handle the rest automatically
-            require('mason').setup({})
-            -- Removed mason-lspconfig setup to fix loading order issues
+            -- Add Lua LSP with modern settings
+            lspconfig.lua_ls.setup(lsp_zero.nvim_lua_ls())
         end
     }
 }
