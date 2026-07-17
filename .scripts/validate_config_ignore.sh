@@ -19,6 +19,7 @@ should_track=(
   "$HOME/.config/iterm2/default_profile.json"
   "$HOME/.config/nvim/init.lua"
   "$HOME/.config/nvim/lua/plugins/example.lua"
+  "$HOME/.scripts/install-vscode-extensions.sh"
 )
 
 # A list of absolute paths that SHOULD be blocked by your * rules
