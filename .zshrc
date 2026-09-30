@@ -58,8 +58,7 @@ _load_settings "$HOME/.config/zsh/configs"
 [[ -f ~/.aliases ]] && source ~/.aliases
 
 
-export NVM_DIR="$HOME/.nvm"
-[ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"  # This loads nvm
-[ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion"  # This loads nvm bash_completion
+# nvm: loaded lazily in ~/.config/zsh/configs/post/99-nvm.zsh (loading it here too
+# doubled shell startup time)
 
 . "$HOME/.local/share/../bin/env"
