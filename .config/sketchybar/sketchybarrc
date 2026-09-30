@@ -5,7 +5,7 @@ source "$CONFIG_DIR/colors.sh"
 PLUGIN_DIR="$CONFIG_DIR/plugins"
 ITEM_DIR="$CONFIG_DIR/items"
 
-sketchybar --bar height=24        \
+sketchybar --bar height=30        \
                  blur_radius=30   \
                  position=top     \
                  sticky=off       \
@@ -26,7 +26,7 @@ default=(
   label.padding_right=4
   background.color=$ITEM_BG_COLOR
   background.corner_radius=0
-  background.height=20
+  background.height=25
 )
 sketchybar --default "${default[@]}"
 
