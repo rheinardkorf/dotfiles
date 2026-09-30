@@ -1,5 +1,11 @@
-background-opacity=0.94
-macos-titlebar-style=transparent
+# Fully opaque (was 0.94). On macOS, changing this needs a full Ghostty restart.
+background-opacity = 1
+# No title bar (keeps the frame and rounded corners). Drag with option+click on the edge;
+# AeroSpace positions windows anyway. Was: transparent
+macos-titlebar-style = hidden
+# No window frame at all: square corners, no border. AeroSpace handles size and
+# position. (macOS native fullscreen doesn't work with this; AeroSpace's does.)
+window-decoration = none
 macos-titlebar-proxy-icon=hidden
 
 # This is the configuration file for Ghostty.
@@ -42,3 +48,55 @@ font-feature = -liga
 # # which is explained in the docs for that config option.
 # # Just for example:
 # resize-overlay-duration = 4s 200ms
+
+# ============================================================================
+# tmux integration
+# ============================================================================
+# Every new Ghostty window drops you straight into tmux:
+#   - reattaches to your most recent tmux session, or starts one called "main"
+#   - after you detach (prefix d) you land in a normal zsh instead of the
+#     window closing, so you can still pick another project with Ctrl-f
+# (-i loads your full .zshrc, which is where Homebrew is added to PATH, so tmux
+# and sesh can be found.) To get a plain terminal without tmux, comment out this line.
+command = /bin/zsh -lic 'tmux attach || tmux new -s main; exec zsh -l'
+
+# --- Mac shortcuts that drive tmux instead of Ghostty ------------------------
+# Each binding types the tmux prefix (Ctrl-Space, sent as the byte \x00)
+# followed by a tmux key, exactly as if you had pressed them yourself.
+# This replaces Ghostty's own tabs/splits with tmux windows/panes.
+# Delete any line to get Ghostty's default behaviour back for that key.
+
+# Cmd-n: "new window" opens the sesh project picker        (prefix f)
+keybind = cmd+n=text:\x00f
+# Cmd-t: new tmux window (tab) in the current directory    (prefix c)
+keybind = cmd+t=text:\x00c
+# Cmd-w: close the current pane, asks y/n first            (prefix x)
+keybind = cmd+w=text:\x00x
+# Cmd-d / Cmd-Shift-d: split side-by-side / stacked        (prefix | / prefix -)
+keybind = cmd+d=text:\x00|
+keybind = cmd+shift+d=text:\x00-
+# Cmd-[ / Cmd-]: previous / next tmux window               (prefix p / prefix n)
+keybind = cmd+[=text:\x00p
+keybind = cmd+]=text:\x00n
+# Cmd-1..9: jump to tmux window N                          (prefix 1..9)
+# Bound twice on purpose: Ghostty knows digits by both the physical key
+# (digit_1) and the character (1), and has default "go to tab" shortcuts on
+# both. Binding only one lets the other default swallow the key.
+keybind = cmd+digit_1=text:\x001
+keybind = cmd+1=text:\x001
+keybind = cmd+digit_2=text:\x002
+keybind = cmd+2=text:\x002
+keybind = cmd+digit_3=text:\x003
+keybind = cmd+3=text:\x003
+keybind = cmd+digit_4=text:\x004
+keybind = cmd+4=text:\x004
+keybind = cmd+digit_5=text:\x005
+keybind = cmd+5=text:\x005
+keybind = cmd+digit_6=text:\x006
+keybind = cmd+6=text:\x006
+keybind = cmd+digit_7=text:\x007
+keybind = cmd+7=text:\x007
+keybind = cmd+digit_8=text:\x008
+keybind = cmd+8=text:\x008
+keybind = cmd+digit_9=text:\x009
+keybind = cmd+9=text:\x009
