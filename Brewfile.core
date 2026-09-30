@@ -1,0 +1,12 @@
+# Core tools every machine needs for the terminal workflow.
+# Installed (only if missing, never upgraded) by ~/.scripts/bootstrap.sh.
+# Machine-specific apps don't belong here.
+
+brew "tmux"                  # terminal multiplexer
+brew "sesh"                  # tmux session picker (Cmd-n / prefix f / Ctrl-f)
+brew "zoxide"                # frecent folders for sesh, and `z`
+brew "gitmux"                # git block in the tmux bar
+brew "jq"                    # used by scripts (incl. bootstrap's Claude hook merge)
+
+cask "ghostty@tip"           # terminal
+cask "font-hack-nerd-font"   # icons in the tmux bar and sesh picker

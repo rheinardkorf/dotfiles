@@ -7,6 +7,7 @@
 !.gitignore
 !.gitconfig
 !Brewfile
+!Brewfile.core
 !.zshrc
 !.gitmux.conf
 
