@@ -60,3 +60,6 @@ _load_settings "$HOME/.config/zsh/configs"
 
 # nvm: loaded lazily in ~/.config/zsh/configs/post/99-nvm.zsh (loading it here too
 # doubled shell startup time)
+
+# Tools installed by uv / Claude Code's installers live in ~/.local/bin (if present)
+[ -f "$HOME/.local/bin/env" ] && . "$HOME/.local/bin/env"
