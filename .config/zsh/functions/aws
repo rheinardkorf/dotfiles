@@ -1,0 +1,53 @@
+# Get a 12-hour MFA session for an AWS profile and load it into this shell.
+# Then start claude (or anything else) from the same terminal.
+#   aws-mfa-login <profile>
+# The profile's MFA device and region come from ~/.aws/config:
+#   aws configure set mfa_serial arn:aws:iam::<account>:mfa/<device> --profile <profile>
+function aws-mfa-login() {
+  local profile="$1" mfa_serial region code creds
+
+  if [[ -z "$profile" ]]; then
+    echo "usage: aws-mfa-login <profile>"
+    echo "profiles: $(aws configure list-profiles 2>/dev/null | tr '\n' ' ')"
+    return 1
+  fi
+
+  mfa_serial="$(aws configure get mfa_serial --profile "$profile" 2>/dev/null)"
+  if [[ -z "$mfa_serial" ]]; then
+    echo "Profile '$profile' has no mfa_serial in ~/.aws/config. Add it with:"
+    echo "  aws configure set mfa_serial <mfa-device-arn> --profile $profile"
+    return 1
+  fi
+  region="$(aws configure get region --profile "$profile" 2>/dev/null)"
+
+  # Start clean so the long-term key is only used to request the session.
+  unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN AWS_CREDENTIAL_EXPIRATION
+
+  printf "MFA code for %s (from 1Password): " "$profile"
+  read -r code
+
+  creds=$(aws sts get-session-token --profile "$profile" \
+    --serial-number "$mfa_serial" --token-code "$code" \
+    --duration-seconds 43200 --query Credentials --output json) || {
+    echo "Failed to get an MFA session. Check the code and try again."
+    return 1
+  }
+
+  export AWS_ACCESS_KEY_ID=$(echo "$creds" | jq -r .AccessKeyId)
+  export AWS_SECRET_ACCESS_KEY=$(echo "$creds" | jq -r .SecretAccessKey)
+  export AWS_SESSION_TOKEN=$(echo "$creds" | jq -r .SessionToken)
+  export AWS_CREDENTIAL_EXPIRATION=$(echo "$creds" | jq -r .Expiration)
+  export AWS_REGION="${region:-us-east-1}"
+
+  echo "MFA session for $profile active until $AWS_CREDENTIAL_EXPIRATION ($AWS_REGION)."
+}
+
+# Drop the MFA session from this shell.
+function aws-mfa-logout() {
+  unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN AWS_CREDENTIAL_EXPIRATION
+  echo "MFA session cleared."
+}
+
+# Tab-complete profile names for aws-mfa-login
+_aws_mfa_login() { compadd -- ${(f)"$(aws configure list-profiles 2>/dev/null)"}; }
+(( $+functions[compdef] )) && compdef _aws_mfa_login aws-mfa-login
