@@ -6,6 +6,9 @@ macos-titlebar-style = hidden
 # No window frame at all: square corners, no border. AeroSpace handles size and
 # position. (macOS native fullscreen doesn't work with this; AeroSpace's does.)
 window-decoration = none
+# A little space above the tmux bar (top, bottom; points). Only new windows pick
+# this up. The padding uses the background colour, same as the tmux bar.
+window-padding-y = 6,2
 macos-titlebar-proxy-icon=hidden
 
 # This is the configuration file for Ghostty.
