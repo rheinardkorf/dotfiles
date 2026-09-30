@@ -4,72 +4,42 @@
 source "$CONFIG_DIR/colors.sh"
 
 EVENT_NAME="$SENDER" # Sketchybar sets the event name in this variable
-CURRENT_WORKSPACE=$(aerospace list-workspaces --focused)
 WORKSPACE=$1
-
-SKETCHYBAR_WINDOWS=$(sketchybar --query bar | jq -r '.items[] | select(startswith("window."))')
-AEROSPACE_WINDOWS=$(aerospace list-windows --json --all |jq -r '.[] | "window.\(.["window-id"])"')
-MISSING_WINDOWS=$(echo "$SKETCHYBAR_WINDOWS" | grep -F -x -v -f <(echo "$AEROSPACE_WINDOWS"))
 
 # Handle different events
 case "$EVENT_NAME" in
 "aerospace_workspace_change" | "forced")
-    if [ "$WORKSPACE" = "$CURRENT_WORKSPACE" ]; then
+    if [ "$WORKSPACE" = "$(aerospace list-workspaces --focused)" ]; then
         sketchybar --set space.label.$WORKSPACE background.color=$ACTIVE_COLOR
     else
         sketchybar --set space.label.$WORKSPACE background.color=$INACTIVE_COLOR
     fi
     ;;
 "aerospace_window_change" | "routine")
-    
-    # Delete windows that are no longer in Aerospace
-    for window in $MISSING_WINDOWS; do
-        sketchybar --remove "$window"
+    # One icon per app per workspace: two Brave windows in a workspace show one
+    # Brave icon; Brave in workspaces 1 and 3 shows one icon in each.
+    # Icons are items named app.<workspace>.<app>. Every workspace runs this
+    # script on each window change and syncs only its own icons.
+    PREFIX="app.$WORKSPACE."
+    BAR_ITEMS=$(sketchybar --query bar | jq -r '.items[]')
+
+    # Remove per-window icons left over from the previous version of this script
+    for item in $(grep '^window\.' <<<"$BAR_ITEMS"); do
+        sketchybar --remove "$item" 2>/dev/null
     done
 
-    # Get all windows on the current workspace
-    # Returns a JSON array of windows with the following format:
-    # [
-    #     {
-    #         "window-id": 1,
-    #         "window-title": "Window 1",
-    #         "app-name": "App 1"
-    #     }
-    # ]
-    WINDOWS=$(aerospace list-windows --json --workspace $WORKSPACE)
+    # Distinct apps with windows in this workspace
+    WANTED=""
+    while IFS= read -r app_name; do
+        [ -n "$app_name" ] || continue
+        item="$PREFIX$(printf '%s' "$app_name" | tr -c 'A-Za-z0-9' '_')"
+        WANTED="$WANTED$item"$'\n'
 
-    # Initialize arrays for tracking unique apps
-    seen_apps=""
-    seen_ids=""
-    window_ids=""
-
-    # Debug logging
-    while read -r window; do
-        window_id=$(echo "$window" | jq -r '."window-id"')
-        app_name=$(echo "$window" | jq -r '."app-name"')
-
-        # Skip if window is already in sketchybar
-        if echo "$SKETCHYBAR_WINDOWS" | grep -q "window.$window_id"; then
-            continue
-        fi
-
-        # Check if we've seen this app name before
-        if ! echo "$seen_apps" | grep -q "^$app_name$"; then
-            # Add to our tracking variables
-            seen_apps="$seen_apps$app_name\n"
-            seen_ids="$seen_ids$window_id\n"
-
-            # Add to window_ids with proper spacing
-            if [ -z "$window_ids" ]; then
-                window_ids="window.$window_id"
-            else
-                window_ids="$window_ids window.$window_id"
-            fi
-
-            sketchybar --add item window.$window_id left \
-                --set window.$window_id \
-                icon=$($CONFIG_DIR/plugins/icon_map_fn.sh "$app_name") \
-                icon.font="sketchybar-app-font:Regular:12.0" \
+        if ! grep -qxF "$item" <<<"$BAR_ITEMS"; then
+            sketchybar --add item "$item" left \
+                --set "$item" \
+                icon="$($CONFIG_DIR/plugins/icon_map_fn.sh "$app_name")" \
+                icon.font="sketchybar-app-font:Regular:14.0" \
                 icon.padding_left=0 \
                 icon.padding_right=0 \
                 label.padding_left=0 \
@@ -79,16 +49,16 @@ case "$EVENT_NAME" in
                 background.padding_left=0 \
                 background.padding_right=0 \
                 click_script="aerospace workspace $WORKSPACE"
-
-            sketchybar --move window.$window_id after space.label.$WORKSPACE
+            sketchybar --move "$item" after "space.label.$WORKSPACE"
         fi
-    done < <(echo "$WINDOWS" | jq -c '.[]')
+    done < <(aerospace list-windows --workspace "$WORKSPACE" --format '%{app-name}' | sort -u)
 
-    # Add logic to update window icons
-    source "$CONFIG_DIR/plugins/aerospace_arrange.sh"
+    # Remove icons for apps that no longer have a window in this workspace
+    awk -v p="$PREFIX" 'index($0, p) == 1' <<<"$BAR_ITEMS" | while IFS= read -r item; do
+        grep -qxF "$item" <<<"$WANTED" || sketchybar --remove "$item"
+    done
     ;;
 *)
     echo "Unknown event: $EVENT_NAME"
     ;;
 esac
-

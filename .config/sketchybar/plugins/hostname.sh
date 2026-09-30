@@ -1,7 +1,9 @@
 #!/bin/bash
 
-# Get hostname without .local suffix
-HOSTNAME=$(scutil --get ComputerName)
+# Machine name from ~/.config/machine-name (the MDM controls the computer name),
+# falling back to the system name if that file doesn't exist
+HOSTNAME=$(head -n1 "$HOME/.config/machine-name" 2>/dev/null | tr -d '[:space:]')
+[ -n "$HOSTNAME" ] || HOSTNAME=$(scutil --get ComputerName)
 
 # Set color based on hostname
 case "$HOSTNAME" in

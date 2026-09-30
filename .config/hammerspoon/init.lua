@@ -86,7 +86,18 @@ local mqtt_pass = getEnvVar("MQTT_PASS")
 local mosquitto_pub = hs.execute("which mosquitto_pub", true):gsub("%s+", "")
 
 -- Device and topic setup
-local mac_hostname = hs.host.localizedName()
+-- Machine name from ~/.config/machine-name (the MDM controls the computer name),
+-- falling back to the system name if that file doesn't exist
+local function machineName()
+    local f = io.open(os.getenv("HOME") .. "/.config/machine-name", "r")
+    if f then
+        local name = f:read("*l")
+        f:close()
+        if name and name:match("%S") then return name:match("^%s*(.-)%s*$") end
+    end
+    return hs.host.localizedName()
+end
+local mac_hostname = machineName()
 -- Camera topic
 local mqtt_camera_topic = "office/" .. mac_hostname .. "/camera"
 local lastCameraState = "OFF"
