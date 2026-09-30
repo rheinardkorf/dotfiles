@@ -1,0 +1,32 @@
+#:schema https://github.com/joshmedeski/sesh/raw/main/sesh.schema.json
+# sesh: tmux session manager. Picker: prefix f (in tmux) / Ctrl-f or `t` (shell)
+
+# Live sessions on top, then config + zoxide folders merged by how often you visit them
+sort_order = [
+  "tmux",
+  ["config", "zoxide"],
+]
+
+[tui]
+show_icons = true
+show_windows = true
+group_separator = true
+preview = true            # ctrl+o toggles
+
+# ~/.cfg is a bare dotfiles repo whose work tree is $HOME (see the `config` alias)
+[[session]]
+name = "dotfiles"
+path = "~"
+alias = "dot"
+startup_command = "config status -sb -uno"
+
+[[session]]
+name = "tmux-config"
+path = "~/.config/tmux"
+alias = "tmx"
+startup_command = "nvim tmux.conf"
+
+[[session]]
+name = "sesh-config"
+path = "~/.config/sesh"
+startup_command = "nvim sesh.toml"
