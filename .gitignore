@@ -7,6 +7,8 @@
 !.gitignore
 !.gitconfig
 !Brewfile
+!.zshrc
+!.gitmux.conf
 
 # Claude skills
 # =============================
@@ -17,9 +19,16 @@
 # Then whitelist...
 !.claude/skills/
 !.claude/skills/**
+# ...except skills synced from claude.ai (downloaded automatically, not yours)
+.claude/skills/synced/
+
+# Espanso (text expansion)
+!.espanso/
+!.espanso/**
 
 # VSCode Profiles
-!.code_profiles
+!.code_profiles/
+!.code_profiles/**
 
 # Config files
 # ==============================
@@ -43,20 +52,40 @@
 !.config/nvim/**
 !.config/oh-my-zsh/
 !.config/oh-my-zsh/**
-!.config/.README.md
+!.config/README.md
+!.config/gh/
+!.config/gh/**
+!.config/git/
+!.config/git/**
+!.config/karabiner/
+!.config/karabiner/**
+.config/karabiner/automatic_backups/
+!.config/nushell/
+!.config/nushell/**
+# ...but never shell history (it can contain anything typed, including secrets)
+.config/nushell/history.*
+!.config/sesh/
+!.config/sesh/**
 !.config/sketchybar/
 !.config/sketchybar/**
 !.config/tree-sitter/
 !.config/tree-sitter/**
 !.config/zsh/
 !.config/zsh/**
+!.config/tmux/
+!.config/tmux/**
+# ...but not the downloaded plugins and themes (reinstalled per machine)
+.config/tmux/plugins/
+.config/tmux/themes/
 
-# TODO: Remove credentials first
-# !.zshrc
+# .zshrc is allowed above; machine-specific or secret bits go in ~/.zshrc.local (ignored)
 
 # Scripts
-!.scripts
+!.scripts/
+!.scripts/**
 
 
 
 
+# Never track macOS folder metadata, even inside allowed folders
+.DS_Store
