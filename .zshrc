@@ -62,4 +62,4 @@ _load_settings "$HOME/.config/zsh/configs"
 # doubled shell startup time)
 
 # Tools installed by uv / Claude Code's installers live in ~/.local/bin (if present)
-[ -f "$HOME/.local/bin/env" ] && . "$HOME/.local/bin/env"
+if [ -f "$HOME/.local/bin/env" ]; then . "$HOME/.local/bin/env"; fi
