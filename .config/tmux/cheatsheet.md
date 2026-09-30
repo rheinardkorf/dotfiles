@@ -16,6 +16,8 @@
    prefix f       sesh picker (popup)
      type         fuzzy filter        ctrl+o   toggle preview
      dot / tmx    aliases: dotfiles, tmux config (~/.config/sesh/sesh.toml)
+   prefix N       new session by name, in the current folder
+                  (e.g. a scratch session; switches if it exists)
    prefix s       tmux tree view of sessions & windows
    prefix Tab     previous session
    prefix P       promote: move this window into its own session
