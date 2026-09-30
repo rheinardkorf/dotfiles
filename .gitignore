@@ -52,6 +52,11 @@
 !.config/nvim/**
 !.config/oh-my-zsh/
 !.config/oh-my-zsh/**
+# ...but not the oh-my-zsh repo itself (reinstalled per machine)
+.config/oh-my-zsh/.git/
+.config/oh-my-zsh/lib/
+.config/oh-my-zsh/plugins/
+.config/oh-my-zsh/themes/
 !.config/README.md
 !.config/gh/
 !.config/gh/**

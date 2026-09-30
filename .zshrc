@@ -60,5 +60,3 @@ _load_settings "$HOME/.config/zsh/configs"
 
 # nvm: loaded lazily in ~/.config/zsh/configs/post/99-nvm.zsh (loading it here too
 # doubled shell startup time)
-
-. "$HOME/.local/share/../bin/env"
