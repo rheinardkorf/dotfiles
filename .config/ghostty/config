@@ -68,6 +68,9 @@ command = /bin/zsh -lic 'tmux attach || tmux new -s main; exec zsh -l'
 
 # Cmd-n: "new window" opens the sesh project picker        (prefix f)
 keybind = cmd+n=text:\x00f
+# Cmd-Shift-n: a real new Ghostty window (then Cmd-n to pick a different session,
+# so two windows can show two sessions side by side)
+keybind = cmd+shift+n=new_window
 # Cmd-t: new tmux window (tab) in the current directory    (prefix c)
 keybind = cmd+t=text:\x00c
 # Cmd-w: close the current pane, asks y/n first            (prefix x)
