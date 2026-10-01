@@ -55,6 +55,24 @@ elif command -v brew >/dev/null; then
   done < <(sed -nE 's/^[[:space:]]*(brew|cask)[[:space:]]+"([^"]+)".*/\1 \2/p' "$BREWFILE")
 fi
 
+# --- Desktop services: start what's installed but not running ---------------
+echo "Desktop services"
+if command -v brew >/dev/null && brew list --formula sketchybar >/dev/null 2>&1; then
+  if brew services list 2>/dev/null | awk '$1=="sketchybar"{print $2}' | grep -qx started; then okay "sketchybar service"
+  else todo "start sketchybar service (and at login)"; run brew services start sketchybar >/dev/null || fail "sketchybar service failed to start"; fi
+fi
+if command -v espanso >/dev/null; then
+  if espanso status 2>/dev/null | grep -q "is running"; then okay "espanso service"
+  else todo "start espanso service (and at login)"; run sh -c 'espanso service register >/dev/null 2>&1; espanso start' || fail "espanso failed to start"; fi
+fi
+for app in AeroSpace Hammerspoon; do
+  [[ -d "/Applications/$app.app" ]] || continue
+  if pgrep -xq "$app"; then okay "$app running"
+  else
+    todo "launch $app (grant it Accessibility access when macOS asks)"; run open -a "$app" || fail "$app failed to launch"
+  fi
+done
+
 # --- tmux plugins (TPM) ------------------------------------------------------
 echo "tmux plugins"
 if [[ -d "$TMUX_DIR/plugins/tpm/.git" ]]; then

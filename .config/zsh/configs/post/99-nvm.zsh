@@ -20,7 +20,8 @@ _nvm_bin_for() {
   [[ -d "$dir/bin" ]] && print -r -- "$dir/bin"
 }
 _nvm_default_bin() {
-  _nvm_bin_for "$(<"$NVM_DIR/alias/default")" 2>/dev/null
+  [[ -r "$NVM_DIR/alias/default" ]] || return 1   # no default yet (fresh machine)
+  _nvm_bin_for "$(<"$NVM_DIR/alias/default")"
 }
 # Put a Node bin/ first on PATH, replacing any other nvm-managed Node
 _nvm_path_use() {
@@ -36,8 +37,14 @@ unset _default_bin
 _nvm_load() {
   (( $+functions[nvm_find_nvmrc] )) && return
   unfunction nvm 2>/dev/null
-  [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh" --no-use
-  [ -s "$NVM_DIR/bash_completion" ] && . "$NVM_DIR/bash_completion"
+  # nvm.sh in $NVM_DIR (standard install, or a link to Homebrew's), else Homebrew's own
+  local brew_nvm="${HOMEBREW_PREFIX:-/opt/homebrew}/opt/nvm"
+  if [ -s "$NVM_DIR/nvm.sh" ]; then . "$NVM_DIR/nvm.sh" --no-use
+  elif [ -s "$brew_nvm/nvm.sh" ]; then . "$brew_nvm/nvm.sh" --no-use
+  fi
+  if [ -s "$NVM_DIR/bash_completion" ]; then . "$NVM_DIR/bash_completion"
+  elif [ -s "$brew_nvm/etc/bash_completion.d/nvm" ]; then . "$brew_nvm/etc/bash_completion.d/nvm"
+  fi
   return 0   # the completion file can exit non-zero; nvm itself loaded fine
 }
 nvm() { _nvm_load; nvm "$@"; }

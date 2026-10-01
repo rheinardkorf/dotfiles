@@ -15,6 +15,7 @@ should_track=(
   "$HOME/Brewfile"
   "$HOME/Brewfile.core"
   "$HOME/.scripts/bootstrap.sh"
+  "$HOME/.scripts/install-dotfiles.sh"
   "$HOME/.claude/skills/test_skill/SKILL.md"
   "$HOME/.config/aerospace/aerospace.toml"
   "$HOME/.config/aerospace/nested/subfolder/test.toml"

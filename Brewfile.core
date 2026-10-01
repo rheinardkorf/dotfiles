@@ -1,12 +1,41 @@
-# Core tools every machine needs for the terminal workflow.
+# Everything a machine needs to be productive on day one.
 # Installed (only if missing, never upgraded) by ~/.scripts/bootstrap.sh.
-# Machine-specific apps don't belong here.
+# Apps only one machine needs don't belong here.
 
+# Terminal workflow (tmux + sesh + Ghostty)
 brew "tmux"                  # terminal multiplexer
 brew "sesh"                  # tmux session picker (Cmd-n / prefix f / Ctrl-f)
 brew "zoxide"                # frecent folders for sesh, and `z`
 brew "gitmux"                # git block in the tmux bar
-brew "jq"                    # used by scripts (incl. bootstrap's Claude hook merge)
-
 cask "ghostty@tip"           # terminal
 cask "font-hack-nerd-font"   # icons in the tmux bar and sesh picker
+
+# Shell and editor (needed by the zsh and nvim configs)
+brew "fzf"                   # fuzzy finder; 10-fzf.zsh loads it in every shell
+brew "fd"                    # file search used by the fzf setup
+brew "nvm"                   # Node versions (lazy-loaded by 99-nvm.zsh)
+brew "neovim"                # editor
+brew "ripgrep"               # project search (LazyVim)
+
+# General command-line tools
+brew "jq"                    # JSON on the command line (bootstrap uses it too)
+brew "gh"                    # GitHub CLI
+brew "git-lfs"               # Git large-file storage
+brew "coreutils"             # GNU core utilities (gdate, gls, ...)
+brew "tree"                  # folder trees
+brew "trash"                 # move files to the Trash instead of deleting
+brew "awscli"                # AWS CLI (used by aws-mfa-login)
+cask "1password-cli"         # `op`, the 1Password command line
+
+# Desktop: window management and menu bar (configs in ~/.config/aerospace, sketchybar, hammerspoon)
+cask "nikitabobko/tap/aerospace"           # tiling window manager
+brew "felixkratz/formulae/sketchybar"      # menu bar (runs as a brew service)
+brew "felixkratz/formulae/borders"         # focused-window border (started by AeroSpace)
+cask "font-sketchybar-app-font"            # app icons in SketchyBar
+cask "hammerspoon"                         # automation (camera/mic status, app hotkeys)
+
+# Apps
+cask "1password"             # passwords, and the MFA codes for aws-mfa-login
+cask "espanso"               # text expansion (config in ~/.espanso)
+cask "brave-browser"         # browser
+cask "slack"                 # chat
