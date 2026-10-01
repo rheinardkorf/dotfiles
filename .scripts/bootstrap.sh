@@ -62,7 +62,7 @@ if command -v brew >/dev/null && brew list --formula sketchybar >/dev/null 2>&1;
   else todo "start sketchybar service (and at login)"; run brew services start sketchybar >/dev/null || fail "sketchybar service failed to start"; fi
 fi
 if command -v espanso >/dev/null; then
-  if espanso status 2>/dev/null | grep -q "is running"; then okay "espanso service"
+  if pgrep -xq espanso || espanso status 2>/dev/null | grep -q "is running"; then okay "espanso service"
   else todo "start espanso service (and at login)"; run sh -c 'espanso service register >/dev/null 2>&1; espanso start' || fail "espanso failed to start"; fi
 fi
 for app in AeroSpace Hammerspoon; do

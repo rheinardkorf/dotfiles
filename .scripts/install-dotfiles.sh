@@ -95,8 +95,12 @@ else
 fi
 
 # --- Submodules (oh-my-zsh) ---------------------------------------------------------
-if [[ -f "$GIT_DIR/index" || $DRY_RUN == false ]]; then
-  if [[ -f "$GIT_DIR/index" ]] && (cd "$WORK_TREE" && cfg submodule status 2>/dev/null) | grep -q '^-'; then
+if [[ -f "$GIT_DIR/index" ]]; then
+  status="$(cd "$WORK_TREE" && cfg submodule status 2>&1)" \
+    || die "submodule check failed: $status"
+  # Only fetch when oh-my-zsh is actually missing or empty. An existing copy (even
+  # one git reports as "-", not registered) is left exactly as it is.
+  if [[ ! -s "$WORK_TREE/.config/oh-my-zsh/oh-my-zsh.sh" ]]; then
     doing "fetch submodules (oh-my-zsh)"
     run sh -c "cd '$WORK_TREE' && /usr/bin/git --git-dir='$GIT_DIR' --work-tree='$WORK_TREE' submodule update --init --recursive -q" \
       || die "submodule update failed"

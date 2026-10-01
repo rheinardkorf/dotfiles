@@ -5,6 +5,7 @@
 # Root files
 # =============================
 !.gitignore
+!.gitmodules
 !.gitconfig
 !Brewfile
 !Brewfile.core

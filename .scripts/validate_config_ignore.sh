@@ -11,6 +11,7 @@ echo "----------------------------------------"
 # A list of absolute paths that SHOULD be tracked
 should_track=(
   "$HOME/.gitignore"
+  "$HOME/.gitmodules"
   "$HOME/.gitconfig"
   "$HOME/Brewfile"
   "$HOME/Brewfile.core"
