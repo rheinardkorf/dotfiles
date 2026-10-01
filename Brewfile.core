@@ -16,6 +16,15 @@ brew "fd"                    # file search used by the fzf setup
 brew "nvm"                   # Node versions (lazy-loaded by 99-nvm.zsh)
 brew "neovim"                # editor
 brew "ripgrep"               # project search (LazyVim)
+brew "lazygit"               # git UI; LazyVim opens it with <leader>gg
+brew "tree-sitter-cli"       # builds syntax parsers for nvim-treesitter (LazyVim)
+brew "bat"                   # syntax-highlighted cat; nicer fzf previews
+
+# Languages
+brew "go"                    # Go
+brew "rust"                  # Rust (Homebrew build; not rustup)
+brew "python@3.13"           # a modern python3 for scripts and tools
+brew "uv"                    # Python packages, tools and venvs (replaces pip/pipx)
 
 # General command-line tools
 brew "jq"                    # JSON on the command line (bootstrap uses it too)
@@ -23,6 +32,9 @@ brew "gh"                    # GitHub CLI
 brew "git-lfs"               # Git large-file storage
 brew "coreutils"             # GNU core utilities (gdate, gls, ...)
 brew "tree"                  # folder trees
+brew "wget"                  # downloads (many install instructions assume it)
+brew "httpie"                # friendlier curl for APIs: http GET example.com
+brew "pandoc"                # convert between Markdown, Word, HTML, PDF, ...
 brew "trash"                 # move files to the Trash instead of deleting
 brew "awscli"                # AWS CLI (used by aws-mfa-login)
 cask "1password-cli"         # `op`, the 1Password command line
@@ -33,6 +45,8 @@ brew "felixkratz/formulae/sketchybar"      # menu bar (runs as a brew service)
 brew "felixkratz/formulae/borders"         # focused-window border (started by AeroSpace)
 cask "font-sketchybar-app-font"            # app icons in SketchyBar
 cask "hammerspoon"                         # automation (camera/mic status, app hotkeys)
+cask "hiddenbar"                           # tidy menu-bar icons (apps still managed from their menu entries)
+cask "shortcat"                            # keyboard-driven clicking of on-screen UI
 
 # Apps
 cask "1password"             # passwords, and the MFA codes for aws-mfa-login
