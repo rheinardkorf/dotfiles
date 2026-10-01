@@ -4,16 +4,10 @@
 
 tap "anthropics/tap"
 tap "atlassian/acli", trusted: true
-tap "espanso/espanso", trusted: true
-tap "felixkratz/formulae", trusted: true
-tap "hashicorp/tap", trusted: true
-tap "localstack/tap", trusted: true
 tap "mongodb/brew", trusted: true
-tap "nikitabobko/tap", trusted: true
 tap "oven-sh/bun", trusted: true
 
 brew "aws-sam-cli"
-brew "chafa"
 brew "cmake"
 brew "curl"
 brew "libpq", link: true
@@ -21,17 +15,12 @@ brew "php"
 brew "composer"
 brew "docker"
 brew "docker-compose"
-brew "eslint"
 brew "ffmpeg"
 brew "gcc"
-brew "herdr"
 brew "jira-cli"
 brew "ldns"
-brew "leveldb"
-brew "libxmlsec1"
 brew "llama.cpp"
 brew "mysql"
-brew "neomutt"
 brew "nushell"
 brew "openssh"
 brew "p7zip"
@@ -42,7 +31,6 @@ brew "qpdf"
 brew "sops"
 brew "taplo"
 brew "xcodegen"
-brew "yazi"
 brew "atlassian/acli/acli", trusted: true
 brew "mongodb/brew/mongodb-database-tools", trusted: true
 brew "oven-sh/bun/bun", trusted: true
@@ -54,7 +42,6 @@ cask "docker-desktop"
 cask "font-sf-pro"
 cask "gcloud-cli"
 cask "google-chrome"
-cask "mactex"
 cask "ollama-app"
 cask "postman"
 cask "qlmarkdown"

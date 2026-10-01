@@ -28,10 +28,12 @@ brew "uv"                    # Python packages, tools and venvs (replaces pip/pi
 
 # General command-line tools
 brew "jq"                    # JSON on the command line (bootstrap uses it too)
+brew "git"                   # newer Git than macOS ships
 brew "gh"                    # GitHub CLI
 brew "git-lfs"               # Git large-file storage
 brew "coreutils"             # GNU core utilities (gdate, gls, ...)
 brew "tree"                  # folder trees
+brew "ncdu"                  # find what's using disk space (interactive)
 brew "wget"                  # downloads (many install instructions assume it)
 brew "httpie"                # friendlier curl for APIs: http GET example.com
 brew "pandoc"                # convert between Markdown, Word, HTML, PDF, ...
