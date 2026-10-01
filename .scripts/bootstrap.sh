@@ -88,7 +88,21 @@ while read -r plugin; do
   else todo "$plugin"; need_plugins=true; fi
 done < <(sed -nE "s/^[[:space:]]*set -g @plugin '([^']+)'.*/\1/p" "$TMUX_DIR/tmux.conf" 2>/dev/null)
 if $need_plugins && ! $DRY_RUN; then
-  "$TMUX_DIR/plugins/tpm/bin/install_plugins" >/dev/null || fail "tpm plugin install failed"
+  # TPM's installer asks a tmux server where plugins go; use a private, temporary
+  # server so it reads this machine's config and never touches a running tmux
+  # TPM's installer asks a running tmux server for TMUX_PLUGIN_MANAGER_PATH. Start a
+  # private, temporary server (no user config: no restore, no theme) that knows the
+  # path; TPM reads the @plugin list from tmux.conf itself.
+  # Unset TMUX too: inside tmux it overrides TMUX_TMPDIR and would reach the live server.
+  tpm_tmp="$(mktemp -d /tmp/tpm.XXXXXX)"   # short path: tmux socket paths have a length limit
+  sock="$tpm_tmp/tmux-$(id -u)/default"
+  env -u TMUX TMUX_TMPDIR="$tpm_tmp" tmux -f /dev/null new-session -d -s tpm \; \
+    set-environment -g TMUX_PLUGIN_MANAGER_PATH "$TMUX_DIR/plugins/" \
+    && out="$(env -u TMUX TMUX_TMPDIR="$tpm_tmp" "$TMUX_DIR/plugins/tpm/bin/install_plugins" 2>&1)" \
+    || fail "tpm plugin install failed: ${out:-could not start a temporary tmux server}"
+  # Stop only the private server, addressed by its socket file
+  [[ -S "$sock" ]] && env -u TMUX tmux -S "$sock" kill-server 2>/dev/null
+  rm -rf "$tpm_tmp"
 fi
 
 # --- catppuccin theme ----------------------------------------------------------
