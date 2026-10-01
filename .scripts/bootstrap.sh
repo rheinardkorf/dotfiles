@@ -47,11 +47,12 @@ elif command -v brew >/dev/null; then
   while read -r kind name; do
     if [[ "$kind" == cask ]]; then
       if brew list --cask "$name" >/dev/null 2>&1; then okay "$name"
-      else todo "$name (cask)"; run brew install --cask "$name" || fail "$name install failed"; fi
+      else todo "$name (cask)"; run brew install --cask "$name" </dev/null || fail "$name install failed"; fi
     else
       if brew list --formula "$name" >/dev/null 2>&1; then okay "$name"
-      else todo "$name"; run brew install "$name" || fail "$name install failed"; fi
+      else todo "$name"; run brew install "$name" </dev/null || fail "$name install failed"; fi
     fi
+  # </dev/null on each install: brew reads stdin and would swallow the rest of this list
   done < <(sed -nE 's/^[[:space:]]*(brew|cask)[[:space:]]+"([^"]+)".*/\1 \2/p' "$BREWFILE")
 fi
 
