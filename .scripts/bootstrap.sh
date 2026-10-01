@@ -39,21 +39,42 @@ else
   fi
 fi
 
-# --- Core packages (Brewfile.core): install missing, never upgrade ----------
-echo "Packages ($(basename "$BREWFILE"))"
-if [[ ! -f "$BREWFILE" ]]; then
-  fail "$BREWFILE not found (are the dotfiles checked out?)"
-elif command -v brew >/dev/null; then
-  while read -r kind name; do
-    if [[ "$kind" == cask ]]; then
-      if brew list --cask "$name" >/dev/null 2>&1; then okay "$name"
-      else todo "$name (cask)"; run brew install --cask "$name" </dev/null || fail "$name install failed"; fi
-    else
-      if brew list --formula "$name" >/dev/null 2>&1; then okay "$name"
-      else todo "$name"; run brew install "$name" </dev/null || fail "$name install failed"; fi
+# --- Packages: Brewfile.core, then Brewfile.<machine-name>; install missing, never upgrade
+# Entry options understood (as written by `brew bundle dump`):
+#   trusted: true   third-party tap entry to trust (Homebrew 6 only loads trusted taps)
+#   link: false     don't link into the PATH;  link: true   force-link (keg-only)
+install_brewfile() {
+  local file="$1" kind name opts flag
+  echo "Packages ($(basename "$file"))"
+  while IFS=$'\t' read -r kind name opts; do
+    flag=""; [[ "$kind" == cask ]] && flag="--cask"
+    if brew list ${flag:---formula} "$name" >/dev/null 2>&1; then okay "$name"; continue; fi
+    todo "$name${flag:+ (cask)}"
+    $DRY_RUN && continue
+    # </dev/null on each brew call: brew reads stdin and would swallow the rest of this list
+    if [[ "$opts" == *"trusted: true"* && "$name" == */*/* ]]; then
+      brew trust ${flag:---formula} "$name" </dev/null >/dev/null 2>&1 || fail "could not trust $name"
     fi
-  # </dev/null on each install: brew reads stdin and would swallow the rest of this list
-  done < <(sed -nE 's/^[[:space:]]*(brew|cask)[[:space:]]+"([^"]+)".*/\1 \2/p' "$BREWFILE")
+    if brew install $flag "$name" </dev/null; then
+      [[ "$opts" == *"link: false"* ]] && brew unlink "$name" </dev/null >/dev/null 2>&1
+      [[ "$opts" == *"link: true"* ]] && brew link --force "$name" </dev/null >/dev/null 2>&1
+    else
+      fail "$name install failed"
+    fi
+  done < <(sed -nE 's/^[[:space:]]*(brew|cask)[[:space:]]+"([^"]+)"(.*)$/\1\t\2\t\3/p' "$file")
+}
+
+MACHINE_NAME="$(head -n1 "$HOME/.config/machine-name" 2>/dev/null | tr -d '[:space:]')"
+if [[ ! -f "$BREWFILE" ]]; then
+  echo "Packages"; fail "$BREWFILE not found (are the dotfiles checked out?)"
+elif command -v brew >/dev/null; then
+  install_brewfile "$BREWFILE"
+  MACHINE_BREWFILE="$(dirname "$BREWFILE")/Brewfile.$MACHINE_NAME"
+  if [[ -n "$MACHINE_NAME" && -f "$MACHINE_BREWFILE" ]]; then
+    install_brewfile "$MACHINE_BREWFILE"
+  elif [[ -n "$MACHINE_NAME" ]]; then
+    echo "Packages (machine)"; say "note" "no $(basename "$MACHINE_BREWFILE") for this machine; core only"
+  fi
 fi
 
 # --- Desktop services: start what's installed but not running ---------------

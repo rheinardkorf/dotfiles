@@ -40,8 +40,10 @@ config pull --ff-only          # latest dotfiles
 `bootstrap.sh` is safe to re-run. It installs only what's missing and never
 upgrades:
 
-- Homebrew, and the packages in `~/Brewfile.core` (everything needed on day one;
-  machine-specific apps don't go there)
+- Homebrew, the packages in `~/Brewfile.core` (everything needed on day one),
+  then this machine's extras from `~/Brewfile.<machine-name>` (e.g. `Brewfile.mando`).
+  Third-party tap entries marked `trusted: true` are trusted first (Homebrew 6
+  requires it); `link:` options are applied.
 - tmux plugins (TPM) and the catppuccin theme
 - the Claude Code hooks that show 🔔 / ✓ in the tmux bar (merged into
   `~/.claude/settings.json`; other settings are kept)

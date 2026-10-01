@@ -40,9 +40,9 @@ brew "awscli"                # AWS CLI (used by aws-mfa-login)
 cask "1password-cli"         # `op`, the 1Password command line
 
 # Desktop: window management and menu bar (configs in ~/.config/aerospace, sketchybar, hammerspoon)
-cask "nikitabobko/tap/aerospace"           # tiling window manager
-brew "felixkratz/formulae/sketchybar"      # menu bar (runs as a brew service)
-brew "felixkratz/formulae/borders"         # focused-window border (started by AeroSpace)
+cask "nikitabobko/tap/aerospace", trusted: true           # tiling window manager
+brew "felixkratz/formulae/sketchybar", trusted: true      # menu bar (runs as a brew service)
+brew "felixkratz/formulae/borders", trusted: true         # focused-window border (started by AeroSpace)
 cask "font-sketchybar-app-font"            # app icons in SketchyBar
 cask "hammerspoon"                         # automation (camera/mic status, app hotkeys)
 cask "hiddenbar"                           # tidy menu-bar icons (apps still managed from their menu entries)

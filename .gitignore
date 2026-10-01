@@ -9,6 +9,8 @@
 !.gitconfig
 !Brewfile
 !Brewfile.core
+!Brewfile.mantis
+!Brewfile.mando
 !.zshrc
 !.gitmux.conf
 

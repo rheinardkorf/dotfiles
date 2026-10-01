@@ -15,6 +15,8 @@ should_track=(
   "$HOME/.gitconfig"
   "$HOME/Brewfile"
   "$HOME/Brewfile.core"
+  "$HOME/Brewfile.mantis"
+  "$HOME/Brewfile.mando"
   "$HOME/.scripts/bootstrap.sh"
   "$HOME/.scripts/install-dotfiles.sh"
   "$HOME/.claude/skills/test_skill/SKILL.md"
