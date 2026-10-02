@@ -19,6 +19,7 @@ should_track=(
   "$HOME/Brewfile.mando"
   "$HOME/.scripts/bootstrap.sh"
   "$HOME/.scripts/install-dotfiles.sh"
+  "$HOME/.scripts/seed-zoxide.sh"
   "$HOME/.claude/skills/test_skill/SKILL.md"
   "$HOME/.config/aerospace/aerospace.toml"
   "$HOME/.config/aerospace/nested/subfolder/test.toml"

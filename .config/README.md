@@ -25,6 +25,9 @@ Options: `--dry-run` (only report), `--no-bootstrap`.
 Then:
 
 - Open a new shell to get the `config` alias.
+- Seed zoxide so the sesh picker knows your projects right away:
+  `~/.scripts/seed-zoxide.sh --dry-run`, then without `--dry-run`
+  (scans `~/Development` for git repos and worktrees; `--add <dir>` for extras).
 - Name the machine (used by SketchyBar and Hammerspoon; the MDM may control
   the computer name): `echo <name> > ~/.config/machine-name`
 - Grant AeroSpace and Hammerspoon Accessibility access when macOS asks.
