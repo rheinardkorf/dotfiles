@@ -1,4 +1,2 @@
-require("rheinard.core")
-require("rheinard.lazy")
-require("rheinard.filetypes")
-
+-- bootstrap lazy.nvim, LazyVim and your plugins
+require("config.lazy")
