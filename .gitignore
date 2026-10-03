@@ -47,6 +47,8 @@
 !.config/mic_monitor.sh 
 !.config/ghostty/
 !.config/ghostty/**
+!.config/kitty/
+!.config/kitty/**
 !.config/hammerspoon/
 !.config/hammerspoon/**
 !.config/iterm2/
