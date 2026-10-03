@@ -26,6 +26,7 @@ should_track=(
   "$HOME/.config/iterm2/default_profile.json"
   "$HOME/.config/nvim/init.lua"
   "$HOME/.config/nvim/lua/plugins/example.lua"
+  "$HOME/.config/kitty/kitty.conf"
   "$HOME/.scripts/install-vscode-extensions.sh"
   "$HOME/.scripts/validate_config_ignore.sh"
   "$HOME/.zshrc"
