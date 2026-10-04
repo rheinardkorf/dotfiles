@@ -1,0 +1,27 @@
+#!/bin/bash
+# Capture flow similar to git commit
+INBOX="$HOME/notes/inbox.md"
+CAPTURE_FILE="/tmp/hs_capture_$$"
+
+# Create temp file
+cat > "$CAPTURE_FILE" << 'EOF'
+# Capture Entry
+
+
+EOF
+
+# Open in nvim
+nvim "$CAPTURE_FILE"
+
+# Extract everything, removing only the instruction comment
+LINES=$(cat "$CAPTURE_FILE" | sed '/^# Capture Entry/d')
+
+# Check if there's any non-whitespace content
+if echo "$LINES" | grep -q '[^[:space:]]'; then
+    echo "- [$(date '+%Y-%m-%d %H:%M')]" >> "$INBOX"
+    echo "$LINES" | sed 's/^/  /' >> "$INBOX"
+    echo "Captured ✓"
+fi
+
+# Cleanup
+rm -f "$CAPTURE_FILE"

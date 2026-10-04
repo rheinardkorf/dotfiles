@@ -1,4 +1,4 @@
-hs = hs 
+hs = hs
 
 -- Define meh as Alt+Shift+Ctrl
 meh = {"ctrl", "shift", "alt"}
@@ -17,8 +17,8 @@ hs.hotkey.bind(hyper, "c", function()
     hs.application.launchOrFocus("Microsoft Outlook")
 end)
 
--- Bind meh + c to launch Calendar    
-hs.hotkey.bind(meh, "c", function()
+-- Bind meh + d to launch Calendar (D for date)
+hs.hotkey.bind(meh, "d", function()
     hs.application.launchOrFocus("Calendar")
 end)
 
@@ -37,9 +37,10 @@ hs.hotkey.bind(hyper, "d", function()
     hs.application.launchOrFocus("Cursor")
 end)
 
--- Bind meh + d to launch Visual Studio Code
-hs.hotkey.bind(meh, "d", function()
-    hs.application.launchOrFocus("Visual Studio Code")
+-- Bind meh + c to global capture (nvim in panel)
+hs.hotkey.bind(meh, "c", function()
+    local home = os.getenv("HOME")
+    hs.execute(home .. "/.scripts/kitty-panel capture " .. home .. "/.scripts/capture --width=600 --height=300 --edge=center-sized --opacity=1", true)
 end)
 
 -- Let Sketchybar know when window states have changed.
