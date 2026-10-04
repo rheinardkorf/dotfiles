@@ -31,7 +31,7 @@ exec-on-workspace-change = [
 inner.horizontal = 4  # between tiled windows: 2x the 2pt edge gap
 inner.vertical = 4
 outer.left = 2       # match the ~2pt gap under SketchyBar
-outer.bottom = 10
+outer.bottom = 10    # keep a gap so the pointer doesn't trigger the auto-hiding Dock
 # Top gap under SketchyBar (30 tall). The built-in display's notch makes macOS
 # reserve 32pt at the top (even with the menu bar hidden) and AeroSpace measures
 # from below that, so 0 already leaves ~2pt under the bar. Displays without a
