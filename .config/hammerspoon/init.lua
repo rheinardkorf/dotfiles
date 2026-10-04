@@ -144,5 +144,12 @@ function checkCameraAndMicrophoneStatus()
     end
 end
 
--- Run this check every 5 seconds
-cameraAndMicrophoneTimer = hs.timer.doEvery(5, checkCameraAndMicrophoneStatus)
+-- Machines that can't reach the MQTT broker (e.g. mantis, isolated from the home network)
+local mqttDisabledOn = { mantis = true }
+
+-- Run this check every 5 seconds (only where MQTT is reachable)
+if mqttDisabledOn[mac_hostname] then
+    print("MQTT camera/mic publishing disabled on " .. mac_hostname)
+else
+    cameraAndMicrophoneTimer = hs.timer.doEvery(5, checkCameraAndMicrophoneStatus)
+end
