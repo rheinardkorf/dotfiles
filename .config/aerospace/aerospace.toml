@@ -162,3 +162,7 @@ run = ['move-node-to-workspace 4']
 if.app-id = 'com.apple.PhotoBooth'
 run = ['layout floating']
 
+[[on-window-detected]]
+if.window-title-regex-substring = '^panel-'
+run = ['layout floating']
+

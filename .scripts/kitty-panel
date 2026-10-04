@@ -1,0 +1,63 @@
+#!/usr/bin/env bash
+# Launch a floating Kitty panel using quick-access-terminal
+# Usage: kitty-panel "name" "command" --width=300 --height=150 --x=100 --y=100
+
+PANEL_NAME="$1"
+COMMAND="$2"
+shift 2
+
+# Defaults
+WIDTH="400"
+HEIGHT="200"
+X="100"
+Y="100"
+OPACITY="1"
+EDGE="none"
+
+# Parse options
+while [[ $# -gt 0 ]]; do
+  case $1 in
+    --width=*)
+      WIDTH="${1#*=}"
+      shift
+      ;;
+    --height=*)
+      HEIGHT="${1#*=}"
+      shift
+      ;;
+    --x=*)
+      X="${1#*=}"
+      shift
+      ;;
+    --y=*)
+      Y="${1#*=}"
+      shift
+      ;;
+    --opacity=*)
+      OPACITY="${1#*=}"
+      shift
+      ;;
+    --edge=*)
+      EDGE="${1#*=}"
+      shift
+      ;;
+    *)
+      echo "Unknown option: $1"
+      exit 1
+      ;;
+  esac
+done
+
+# Build options array
+OPTIONS=(-o lines="${HEIGHT}px" -o columns="${WIDTH}px" -o edge="$EDGE" -o background_opacity="$OPACITY")
+
+# Add margins only for edge=none
+if [[ "$EDGE" == "none" ]]; then
+  OPTIONS+=(-o margin_left="$X" -o margin_top="$Y")
+fi
+
+# Launch quick-access-terminal panel
+kitten quick-access-terminal \
+  --instance-group="panel-$PANEL_NAME" \
+  "${OPTIONS[@]}" \
+  "$COMMAND" >/dev/null 2>&1 &
