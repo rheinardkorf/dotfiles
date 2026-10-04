@@ -20,3 +20,12 @@ vim.keymap.set("n", "<leader>ss", ":%s/\\<<C-r><C-w>\\>/<C-r><C-w>/gI<Left><Left
 
 -- Redo
 vim.keymap.set({ "n", "v", "o" }, "U", ":redo<CR>", { noremap = true, desc = "Redo" })
+
+-- Ctrl-c leaves insert mode like Esc (plain Ctrl-c skips InsertLeave autocommands)
+vim.keymap.set("i", "<C-c>", "<Esc>", { noremap = true, desc = "Escape" })
+
+-- Disable Q (replays the last macro; too easy to hit by accident)
+vim.keymap.set("n", "Q", "<nop>", { noremap = true, desc = "Disabled" })
+
+-- Split the line at the cursor, staying in normal mode
+vim.keymap.set("n", "<leader>o", "i<CR><Esc>", { noremap = true, desc = "Split line at cursor" })
