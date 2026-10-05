@@ -1,0 +1,733 @@
+#!/usr/bin/env zsh
+# wt: git worktrees in the <project>/.bare layout, opened in tmux.
+#
+#   <project>/.bare        the repository (bare)
+#   <project>/.git         a file containing "gitdir: ./.bare"
+#   <project>/<branch>/    one folder per worktree (a / in a branch name becomes -)
+#
+# Run `wt help` for the commands.
+
+emulate zsh
+setopt pipe_fail no_unset extended_glob
+
+TMUX_BIN=${commands[tmux]:-/opt/homebrew/bin/tmux}
+YES=0 DRY=0 FORCE=0 FORCE_GONE=0
+ROOT= PROJECT=
+
+usage() {
+  cat <<'EOF'
+wt: git worktrees in the <project>/.bare layout, opened in tmux
+
+  wt new [-s] [-b <base>] <branch>   make (or reopen) a worktree and open it in tmux
+  wt switch [-s] [<branch|folder>]   go to a worktree's tmux window (picker if no name)
+  wt ls                              list this project's worktrees
+  wt rm [-f] [-y] <branch|folder>    remove a worktree and close its tmux panes
+  wt prune [--dry-run] [-y] [--force-gone]
+                                     remove every finished worktree (asks once)
+  wt convert [--dry-run] [-y]        turn a plain clone into the .bare layout
+  wt help [<command>]                this overview, or details for one command
+
+  --dry-run  show what would happen, change nothing
+  -y         don't ask for confirmation
+
+Layout:  <project>/.bare (the repo), <project>/.git (points to it),
+         <project>/<branch>/ (one folder per worktree; / in a branch becomes -)
+Details: wt help <command>, or wt <command> -h
+EOF
+}
+
+help_for() {
+  case $1 in
+    new) cat <<'EOF'
+wt new [-s] [-b <base>] <branch>
+
+Makes the worktree <project>/<branch>/ and opens it in tmux:
+a new window in the current session, named after the folder.
+If a window is already open there, it switches to it instead.
+
+  -s         open it as its own tmux session (<project>/<folder>) instead
+  -b <base>  start a new branch from <base> instead of the default branch
+
+Where the branch comes from:
+  - a worktree for it already exists  -> just open it
+  - the branch exists locally         -> check it out
+  - it exists on origin               -> check it out, tracking origin/<branch>
+  - otherwise                         -> new branch from origin/<default> (or -b <base>)
+
+Outside tmux it prints the folder to cd into (or, with -s, starts tmux there).
+
+  wt new fix-login
+  wt new -s feature/payments
+  wt new -b develop hotfix-123
+EOF
+    ;;
+    switch|sw) cat <<'EOF'
+wt switch [-s] [<branch|folder>]
+
+Goes to an existing worktree in tmux. With no name, pick one with fzf.
+It looks for where the worktree is already open, in this order:
+  1. a window in the current session
+  2. its own session (<project>/<folder>)
+  3. a pane in any other session
+If it isn't open anywhere, it opens a new window there (-s: a new session).
+It never creates a worktree; use wt new for that.
+
+Outside tmux it prints the folder, so this works:  cd "$(wt switch fix-login)"
+
+  wt switch                  pick from a list
+  wt switch fix-login
+  wt switch -s feature/payments
+EOF
+    ;;
+    ls|list) cat <<'EOF'
+wt ls
+
+Lists this project's worktrees. * marks the one you're in.
+
+CHANGES  clean, or how many files have uncommitted changes (untracked files count)
+STATE    default  the default branch (never removed by wt)
+         merged   pushed, and already part of origin/<default>
+         gone     pushed, then its remote branch was deleted, but its commits
+                  aren't in origin/<default>. Usually a squash- or rebase-merged
+                  PR; occasionally a branch deleted without merging.
+         (blank)  still in progress, including branches never pushed
+
+STATE uses what's known from the last fetch; wt prune fetches first.
+EOF
+    ;;
+    rm|remove) cat <<'EOF'
+wt rm [-f] [-y] [--dry-run] <branch|folder>
+
+Removes one worktree folder and closes the tmux panes open in it. If you're
+in one of those panes, it closes last and you land on the default branch's
+window (or the previous session).
+
+The branch itself:
+  merged or gone  -> deleted, printing the commit to restore it from
+  otherwise       -> kept; wt tells you how to delete it yourself
+
+Refuses to remove the default branch's worktree, or one with uncommitted
+changes (untracked files count).
+
+  -f         remove it even with uncommitted changes (they're lost)
+  -y         don't ask before closing other tmux panes
+  --dry-run  show what would happen, change nothing
+
+  wt rm fix-login
+  wt rm feature-payments      (folder name works too)
+EOF
+    ;;
+    prune) cat <<'EOF'
+wt prune [--dry-run] [-y] [--force-gone]
+
+Fetches (pruning deleted remote branches), then finds every worktree that is
+clean and whose branch is merged or gone (see wt help ls). Shows the list
+and the tmux panes that would close, asks once, then removes them all like
+wt rm. Worktrees with uncommitted changes are skipped and named.
+
+A branch that was never pushed always counts as in progress, so a fresh
+wt new is never pruned.
+
+  --dry-run     show the list only
+  -y            don't ask
+  --force-gone  also remove gone worktrees that have uncommitted changes
+                (those changes are lost; the list shows how many). Merged
+                worktrees with changes are still skipped.
+EOF
+    ;;
+    convert) cat <<'EOF'
+wt convert [--dry-run] [-y]
+
+Turns the plain clone you're in into the .bare layout:
+  1. .git        -> .bare      (made bare)
+  2. your files  -> <branch>/  (everything, including untracked and ignored
+                                files like node_modules and .env)
+  3. <branch>/ becomes the worktree for the branch you had checked out
+
+Checks git status afterwards. Close editors open in the repo first; tmux
+panes there stay open but need to cd into <branch>/.
+
+Refuses if there are uncommitted changes to tracked files, other worktrees,
+submodules, a merge or rebase in progress, or a detached HEAD.
+
+  --dry-run  show the plan only
+  -y         don't ask
+EOF
+    ;;
+    help) usage ;;
+    *) die "no command '$1' (try: wt help)" ;;
+  esac
+}
+
+die()  { print -ru2 -- "wt: $*"; exit 1 }
+warn() { print -ru2 -- "wt: $*" }
+
+confirm() {  # confirm <question>
+  (( YES )) && return 0
+  if ! { : </dev/tty } 2>/dev/null; then
+    warn "no terminal to ask on; pass -y to go ahead"
+    return 1
+  fi
+  local reply
+  read -q "reply?$1 [y/N] " </dev/tty
+  local rc=$?
+  print
+  return $rc
+}
+
+# --- Finding the project ------------------------------------------------------
+
+# Sets ROOT (the folder holding .bare) and PROJECT.
+# Returns 1 outside the .bare layout, 2 outside any git repo.
+find_root() {
+  local common
+  common=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null) || return 2
+  [[ $common:t == .bare ]] || return 1
+  ROOT=${common:h:A}
+  PROJECT=$ROOT:t
+}
+
+require_layout() {
+  find_root
+  case $? in
+    0) return 0 ;;
+    2) die "not inside a git repository" ;;
+  esac
+  local top
+  top=$(git rev-parse --show-toplevel 2>/dev/null)
+  warn "this repo isn't in the .bare worktree layout (<project>/.bare + <project>/<branch>/)"
+  if [[ -n $top && -d $top/.git ]]; then
+    warn "it's a plain clone: 'wt convert --dry-run' shows what converting it would do, 'wt convert' does it"
+  else
+    warn "'wt convert' only converts plain clones, so this one needs converting by hand"
+  fi
+  exit 1
+}
+
+g()       { git -C $ROOT "$@" }
+has_ref() { g show-ref -q --verify "$1" }
+folder()  { print -r -- ${1//\//-} }       # branch -> worktree folder name
+
+# The branch new work starts from: origin's default, else the repo's HEAD, else main/master.
+default_branch() {
+  local ref b
+  if ref=$(g symbolic-ref -q --short refs/remotes/origin/HEAD 2>/dev/null); then
+    print -r -- ${ref#origin/}; return 0
+  fi
+  if ref=$(git --git-dir=$ROOT/.bare symbolic-ref -q --short HEAD 2>/dev/null) && has_ref refs/heads/$ref; then
+    print -r -- $ref; return 0
+  fi
+  for b in main master; do
+    has_ref refs/heads/$b && { print -r -- $b; return 0 }
+  done
+  return 1
+}
+
+# Fills WT_PATHS and WT_BRANCHES (branch is empty when detached). Skips the bare repo.
+load_worktrees() {
+  WT_PATHS=() WT_BRANCHES=()
+  local line p= b= bare=0
+  while IFS= read -r line; do
+    case $line in
+      'worktree '*) p=${line#worktree } b= bare=0 ;;
+      'branch '*)   b=${line#branch refs/heads/} ;;
+      bare)         bare=1 ;;
+      '')           [[ -n $p ]] && (( ! bare )) && { WT_PATHS+=($p); WT_BRANCHES+=($b) }
+                    p= ;;
+    esac
+  done < <(g worktree list --porcelain; print)
+}
+
+find_wt() {  # find_wt <branch|folder|path> -> index
+  local i want=$1
+  for (( i = 1; i <= $#WT_PATHS; i++ )); do
+    if [[ $WT_BRANCHES[i] == $want || $WT_PATHS[i]:t == $want || $WT_PATHS[i] == ${want:A} ]]; then
+      print $i; return 0
+    fi
+  done
+  return 1
+}
+
+count_changes() {  # count_changes <dir>: uncommitted changes, untracked files included
+  local -a lines=(${(f)"$(git -C $1 status --porcelain 2>/dev/null)"})
+  print $#lines
+}
+
+# "merged": pushed, and already in origin/<base>.  "gone": its remote branch was
+# deleted (usually after a squash-merged PR).  Empty: still in progress. A branch
+# that was never pushed counts as in progress, so a fresh `wt new` is never pruned.
+branch_state() {  # branch_state <branch> <base>
+  local b=$1 base=$2 up target
+  [[ -n $b && $b != $base ]] || return 0
+  up=$(g for-each-ref --format='%(upstream:short)' refs/heads/$b)
+  [[ -n $up && ${up#*/} != $base ]] || return 0
+  target=$base
+  has_ref refs/remotes/origin/$base && target=origin/$base
+  if g merge-base --is-ancestor refs/heads/$b $target 2>/dev/null; then
+    print merged
+  elif [[ $(g for-each-ref --format='%(upstream:track)' refs/heads/$b) == '[gone]' ]]; then
+    print gone
+  fi
+}
+
+# --- tmux ----------------------------------------------------------------------
+
+session_name() {  # session_name <folder>: <project>/<folder>, like sesh names worktree sessions
+  local n=$PROJECT/$1
+  print -r -- ${n//[.:]/_}
+}
+
+# panes_in <dir>...: tmux panes whose folder is inside one of the dirs,
+# one per line as "pane_id<TAB>session:window<TAB>command"
+panes_in() {
+  local id where cmd p d
+  $TMUX_BIN list-panes -a -F $'#{pane_id}\t#{session_name}:#{window_index}\t#{pane_current_command}\t#{pane_current_path}' 2>/dev/null |
+    while IFS=$'\t' read -r id where cmd p; do
+      for d in "$@"; do
+        if [[ $p == $d || $p == $d/* ]]; then
+          print -r -- "$id"$'\t'"$where"$'\t'"$cmd"; break
+        fi
+      done
+    done
+}
+
+# close_panes <home-dir> <pane_id>...: the pane wt runs in (if listed) closes last,
+# after moving to a window in <home-dir> (or, if it was the session's last pane,
+# to the previous session, so the client doesn't detach).
+close_panes() {
+  local home=$1; shift
+  local cur=${TMUX_PANE:-} id mine=0 target=
+  for id in "$@"; do
+    if [[ $id == $cur ]]; then mine=1; else $TMUX_BIN kill-pane -t $id 2>/dev/null; fi
+  done
+  (( mine )) || return 0
+  if [[ -n $home ]]; then
+    target=$($TMUX_BIN list-panes -s -t $cur -F $'#{window_id}\t#{pane_current_path}' 2>/dev/null |
+      awk -F'\t' -v d="$home" '$2 == d { print $1; exit }')
+  fi
+  if [[ -n $target ]]; then
+    $TMUX_BIN select-window -t $target
+  elif [[ $($TMUX_BIN display -p -t $cur '#{session_windows}/#{window_panes}') == 1/1 ]]; then
+    $TMUX_BIN switch-client -l 2>/dev/null || $TMUX_BIN switch-client -n 2>/dev/null
+  fi
+  $TMUX_BIN display-message "${CLOSE_MSG:-wt: done}" 2>/dev/null
+  $TMUX_BIN kill-pane -t $cur
+}
+
+open_in_tmux() {  # open_in_tmux <dir> <use-session>
+  local dir=$1 session=$2 name
+  name=$(session_name $dir:t)
+  if [[ -z ${TMUX:-} ]]; then
+    (( session )) && exec $TMUX_BIN new-session -A -s $name -c $dir
+    print "cd $dir"
+    return 0
+  fi
+  if (( session )); then
+    $TMUX_BIN has-session -t "=$name" 2>/dev/null || $TMUX_BIN new-session -d -s $name -c $dir
+    $TMUX_BIN switch-client -t "=$name"
+    print "session $name"
+  else
+    local w
+    w=$($TMUX_BIN list-windows -F $'#{window_id}\t#{pane_current_path}' |
+      awk -F'\t' -v d="$dir" '$2 == d { print $1; exit }')
+    if [[ -n $w ]]; then
+      $TMUX_BIN select-window -t $w
+    else
+      $TMUX_BIN new-window -c $dir -n $dir:t
+    fi
+    print "window $dir:t"
+  fi
+}
+
+# focus_worktree <dir> <use-session>: go to where <dir> is already open in tmux,
+# else open it (window, or session with -s).
+focus_worktree() {
+  local dir=$1 session=$2 name target cur_session
+  name=$(session_name $dir:t)
+  if [[ -z ${TMUX:-} ]]; then
+    (( session )) && exec $TMUX_BIN new-session -A -s $name -c $dir
+    print -r -- $dir
+    return 0
+  fi
+  cur_session=$($TMUX_BIN display -p '#{session_name}')
+  # with -s, only a session of its own counts; otherwise prefer the current session
+  target=$($TMUX_BIN list-panes -a -F $'#{session_name}\t#{pane_id}\t#{pane_current_path}' |
+    awk -F'\t' -v d="$dir" -v cur="$cur_session" -v own="$name" -v s=$session '
+      $3 == d || index($3, d "/") == 1 {
+        if (s) { if ($1 != own) next; rank = 1 }
+        else rank = ($1 == cur) ? 1 : ($1 == own) ? 2 : 3
+        if (!best || rank < best) { best = rank; pane = $2 }
+      }
+      END { if (pane) print pane }')
+  if [[ -n $target ]]; then
+    $TMUX_BIN switch-client -t $target 2>/dev/null
+    $TMUX_BIN select-window -t $target
+    $TMUX_BIN select-pane -t $target
+    print -r -- "switched to $($TMUX_BIN display -p -t $target '#{session_name}:#{window_index} (#{window_name})')"
+    return 0
+  fi
+  open_in_tmux $dir $session
+}
+
+pick_worktree() {  # fzf picker; prints the chosen index
+  (( $+commands[fzf] )) || die "fzf isn't installed; name the worktree: wt switch <branch|folder>"
+  local i here=${PWD:A} mark n changes w1=6 w2=6
+  local -a rows
+  for (( i = 1; i <= $#WT_PATHS; i++ )); do
+    mark=' '
+    [[ $here == $WT_PATHS[i] || $here == $WT_PATHS[i]/* ]] && mark='*'
+    if [[ -d $WT_PATHS[i] ]]; then
+      n=$(count_changes $WT_PATHS[i])
+      if (( n )); then changes="$n changed"; else changes=clean; fi
+    else
+      changes=missing
+    fi
+    rows+=("$i"$'\t'"$mark"$'\t'"$WT_PATHS[i]:t"$'\t'"${WT_BRANCHES[i]:-(detached)}"$'\t'"$changes")
+    (( ${#WT_PATHS[i]:t} > w1 )) && w1=${#WT_PATHS[i]:t}
+    (( ${#WT_BRANCHES[i]} > w2 )) && w2=${#WT_BRANCHES[i]}
+  done
+  local row choice
+  local -a f
+  choice=$(for row in $rows; do
+      f=("${(@ps:\t:)row}")
+      printf "%s\t%s %-${w1}s  %-${w2}s  %s\n" $f[1] $f[2] $f[3] $f[4] $f[5]
+    done | fzf --delimiter=$'\t' --with-nth=2 --prompt="$PROJECT worktree> " --height=40% --reverse --no-multi) || return 1
+  print -r -- ${choice%%$'\t'*}
+}
+
+cmd_switch() {
+  local session=0 target=
+  while (( $# )); do
+    case $1 in
+      -s) session=1 ;;
+      -*) die "unknown option $1 (usage: wt switch [-s] [<branch|folder>])" ;;
+      *)  [[ -z $target ]] || die "one worktree at a time"; target=$1 ;;
+    esac
+    shift
+  done
+  require_layout
+  load_worktrees
+  local i
+  if [[ -n $target ]]; then
+    i=$(find_wt $target) || die "no worktree '$target' in $PROJECT (wt ls lists them; wt new makes one)"
+  else
+    i=$(pick_worktree) || exit 1
+  fi
+  [[ -d $WT_PATHS[i] ]] || die "$WT_PATHS[i] is missing (wt prune cleans that up)"
+  focus_worktree $WT_PATHS[i] $session
+}
+
+# --- Commands ------------------------------------------------------------------
+
+cmd_new() {
+  local session=0 base= branch=
+  while (( $# )); do
+    case $1 in
+      -s) session=1 ;;
+      -b) base=${2:-}; [[ -n $base ]] || die "-b needs a branch"; shift ;;
+      -*) die "unknown option $1 (usage: wt new [-s] [-b <base>] <branch>)" ;;
+      *)  [[ -z $branch ]] || die "one branch at a time"; branch=$1 ;;
+    esac
+    shift
+  done
+  [[ -n $branch ]] || die "usage: wt new [-s] [-b <base>] <branch>"
+  git check-ref-format --branch $branch >/dev/null 2>&1 || die "'$branch' isn't a valid branch name"
+  require_layout
+  load_worktrees
+
+  local i dir=$ROOT/$(folder $branch) start
+  if i=$(find_wt $branch) && [[ $WT_BRANCHES[i] == $branch ]]; then
+    dir=$WT_PATHS[i]
+    [[ -n $base ]] && warn "$branch already exists; ignoring -b"
+    print "worktree for $branch already exists: $dir"
+  elif [[ -e $dir ]]; then
+    die "$dir already exists but isn't the worktree for $branch"
+  elif has_ref refs/heads/$branch; then
+    [[ -n $base ]] && warn "$branch already exists; ignoring -b"
+    g worktree add -q $dir $branch || die "couldn't create the worktree"
+    print "created worktree for existing branch $branch"
+  else
+    g fetch -q origin 2>/dev/null || warn "couldn't fetch origin; using what's already here"
+    if has_ref refs/remotes/origin/$branch; then
+      [[ -n $base ]] && warn "origin/$branch exists; using it and ignoring -b"
+      g worktree add -q --track -b $branch $dir origin/$branch || die "couldn't create the worktree"
+      print "created $branch, tracking origin/$branch"
+    else
+      if [[ -z $base ]]; then
+        base=$(default_branch) || die "couldn't work out the default branch; pass -b <base>"
+      fi
+      start=$base
+      has_ref refs/remotes/origin/$base && start=origin/$base
+      g rev-parse -q --verify "$start^{commit}" >/dev/null || die "base branch '$base' not found"
+      g worktree add -q --no-track -b $branch $dir $start || die "couldn't create the worktree"
+      print "created $branch from $start"
+    fi
+  fi
+  open_in_tmux $dir $session
+}
+
+cmd_ls() {
+  (( $# )) && die "usage: wt ls"
+  require_layout
+  load_worktrees
+  local base here=${PWD:A} i p b mark changes state n
+  base=$(default_branch) || base=
+  local -a rows
+  local w1=6 w2=6 w3=7
+  for (( i = 1; i <= $#WT_PATHS; i++ )); do
+    p=$WT_PATHS[i] b=${WT_BRANCHES[i]:-(detached)}
+    mark=' '
+    [[ $here == $p || $here == $p/* ]] && mark='*'
+    if [[ -d $p ]]; then
+      n=$(count_changes $p)
+      if (( n )); then changes="$n changed"; else changes=clean; fi
+    else
+      changes=missing
+    fi
+    if [[ $b == $base ]]; then state=default; else state=$(branch_state $b $base); fi
+    rows+=("$mark"$'\t'"$p:t"$'\t'"$b"$'\t'"$changes"$'\t'"$state")
+    (( ${#p:t} > w1 )) && w1=${#p:t}
+    (( ${#b} > w2 )) && w2=${#b}
+    (( ${#changes} > w3 )) && w3=${#changes}
+  done
+  print -r -- "$PROJECT ($ROOT)"
+  printf "  %-${w1}s  %-${w2}s  %-${w3}s  %s\n" FOLDER BRANCH CHANGES STATE
+  local row; local -a f
+  for row in $rows; do
+    f=("${(@ps:\t:)row}")
+    printf "%s %-${w1}s  %-${w2}s  %-${w3}s  %s\n" $f[1] $f[2] $f[3] $f[4] $f[5]
+  done
+}
+
+# may_discard <branch> <base>: may this worktree's uncommitted changes be thrown away?
+may_discard() {
+  (( FORCE )) && return 0
+  (( FORCE_GONE )) && [[ $(branch_state $1 $2) == gone ]]
+}
+
+# remove_worktrees <mode> <index>...   mode: rm | prune
+remove_worktrees() {
+  local mode=$1; shift
+  local base i p b n state sha home= dir_list=()
+  base=$(default_branch) || base=
+  for i in "$@"; do
+    p=$WT_PATHS[i] b=$WT_BRANCHES[i]
+    [[ -n $b && $b == $base ]] && die "won't remove $p:t: it's the default branch ($base)"
+    if [[ -d $p ]]; then
+      n=$(count_changes $p)
+      (( n )) && ! may_discard "$b" $base && die "$p:t has $n uncommitted change(s); commit or stash them, or use -f"
+    fi
+    dir_list+=($p)
+  done
+  for (( i = 1; i <= $#WT_PATHS; i++ )); do
+    [[ $WT_BRANCHES[i] == $base ]] && home=$WT_PATHS[i]
+  done
+
+  local -a panes=(${(f)"$(panes_in $dir_list)"}) ids
+  local line others=0
+  for line in $panes; do
+    ids+=(${line%%$'\t'*})
+    [[ ${line%%$'\t'*} == ${TMUX_PANE:-} ]] || others=1
+  done
+
+  if [[ $mode == prune ]]; then
+    print "To remove:"
+    for i in "$@"; do
+      n=$(count_changes $WT_PATHS[i])
+      if (( n )); then n=", $n uncommitted change(s) will be lost"; else n=; fi
+      print -r -- "  $WT_PATHS[i]:t  ($WT_BRANCHES[i], $(branch_state $WT_BRANCHES[i] $base)$n)"
+    done
+  fi
+  if (( $#panes )); then
+    print "tmux panes that will close:"
+    for line in $panes; do
+      local -a f=("${(@ps:\t:)line}")
+      print -r -- "  $f[2]  $f[3]"
+    done
+  fi
+  (( DRY )) && { print "(dry run: nothing changed)"; return 0 }
+  if [[ $mode == prune ]] || (( others )); then
+    confirm "Go ahead?" || { print "cancelled"; return 1 }
+  fi
+
+  local -a done_msgs
+  for i in "$@"; do
+    p=$WT_PATHS[i] b=$WT_BRANCHES[i]
+    if [[ -d $p ]]; then
+      if (( $(count_changes $p) )) && may_discard "$b" $base; then
+        g worktree remove --force $p
+      else
+        g worktree remove $p
+      fi ||
+        { warn "couldn't remove $p:t (locked?); skipping"; continue }
+    else
+      g worktree prune
+    fi
+    done_msgs+=("removed $p:t")
+    print -r -- "removed worktree $p:t"
+    [[ -n $b ]] || continue
+    state=$(branch_state $b $base)
+    if [[ -n $state ]]; then
+      sha=$(g rev-parse --short refs/heads/$b)
+      g branch -q -D $b &&
+        print -r -- "  deleted branch $b ($state; was $sha, restore with: git branch $b $sha)"
+    else
+      print -r -- "  kept branch $b (not merged; delete it with: git branch -D $b)"
+    fi
+  done
+  CLOSE_MSG="wt: ${(j:, :)done_msgs}"
+  (( $#ids )) && close_panes "$home" $ids
+  return 0
+}
+
+cmd_rm() {
+  local target=
+  while (( $# )); do
+    case $1 in
+      -f|--force) FORCE=1 ;;
+      -y|--yes)   YES=1 ;;
+      --dry-run) DRY=1 ;;
+      -*) die "unknown option $1 (usage: wt rm [-f] [-y] <branch|folder>)" ;;
+      *)  [[ -z $target ]] || die "one worktree at a time (wt prune removes several)"; target=$1 ;;
+    esac
+    shift
+  done
+  [[ -n $target ]] || die "usage: wt rm [-f] [-y] <branch|folder>"
+  require_layout
+  load_worktrees
+  local i
+  i=$(find_wt $target) || die "no worktree '$target' in $PROJECT (see wt ls)"
+  remove_worktrees rm $i
+}
+
+cmd_prune() {
+  local a
+  for a in "$@"; do
+    case $a in
+      --dry-run) DRY=1 ;;
+      -y|--yes)     YES=1 ;;
+      --force-gone) FORCE_GONE=1 ;;
+      *) die "usage: wt prune [--dry-run] [-y] [--force-gone]" ;;
+    esac
+  done
+  require_layout
+  g fetch -q --prune origin 2>/dev/null || warn "couldn't fetch origin; using the last known remote state"
+  g worktree prune
+  load_worktrees
+  local base i b state
+  base=$(default_branch) || base=
+  local -a picks
+  for (( i = 1; i <= $#WT_PATHS; i++ )); do
+    b=$WT_BRANCHES[i]
+    [[ -n $b && $b != $base && -d $WT_PATHS[i] ]] || continue
+    state=$(branch_state $b $base)
+    [[ -n $state ]] || continue
+    if (( $(count_changes $WT_PATHS[i]) )) && ! { (( FORCE_GONE )) && [[ $state == gone ]] }; then
+      print -r -- "skipping $WT_PATHS[i]:t ($state, but has uncommitted changes)"
+      continue
+    fi
+    picks+=($i)
+  done
+  (( $#picks )) || { print "nothing to prune"; return 0 }
+  remove_worktrees prune $picks
+}
+
+cmd_convert() {
+  local a
+  for a in "$@"; do
+    case $a in
+      --dry-run) DRY=1 ;;
+      -y|--yes)     YES=1 ;;
+      *) die "usage: wt convert [--dry-run] [-y]" ;;
+    esac
+  done
+  find_root && die "already in the .bare layout: $ROOT"
+  local top
+  top=$(git rev-parse --show-toplevel 2>/dev/null) || die "not inside a git repository's files"
+  top=${top:A}
+  [[ -d $top/.git ]] || die "$top isn't a plain clone (its .git isn't a folder), so wt convert can't handle it"
+
+  local branch
+  branch=$(git -C $top symbolic-ref -q --short HEAD) || die "HEAD is detached; check out a branch first"
+  local -a wts=(${(f)"$(git -C $top worktree list --porcelain | grep '^worktree ')"})
+  (( $#wts == 1 )) || die "this clone has other worktrees (git worktree list); remove them first"
+  [[ -e $top/.gitmodules ]] && die "repos with submodules aren't supported"
+  local d
+  for d in MERGE_HEAD CHERRY_PICK_HEAD REVERT_HEAD rebase-merge rebase-apply; do
+    [[ -e $top/.git/$d ]] && die "a merge or rebase is in progress; finish it first"
+  done
+  [[ -z $(git -C $top status --porcelain --untracked-files=no) ]] ||
+    die "there are uncommitted changes to tracked files; commit or stash them first"
+
+  local name=$(folder $branch)
+  local wtdir=$top/$name
+  [[ -e $wtdir ]] && die "$top already contains '$name', which the $branch worktree needs"
+  [[ -e $top/.bare ]] && die "$top/.bare already exists"
+
+  local -a extra=(${(f)"$(git -C $top status --porcelain --ignored --untracked-files=normal | grep -E '^(\?\?|!!) ')"})
+  local -a panes=(${(f)"$(panes_in $top)"})
+
+  print -r -- "Convert $top"
+  print -r -- "  1. .git        -> .bare   (the repository, made bare)"
+  print -r -- "  2. your files  -> $name/   (everything else, as is)"
+  print -r -- "  3. $name/ becomes the worktree for '$branch'"
+  (( $#extra )) && print -r -- "  Untracked and ignored files ($#extra, e.g. node_modules, .env) move with it."
+  if (( $#panes )); then
+    print "tmux panes open in it (they stay open; cd into $name/ afterwards):"
+    local line
+    for line in $panes; do
+      local -a f=("${(@ps:\t:)line}")
+      print -r -- "  $f[2]  $f[3]"
+    done
+  fi
+  print "Close any editor with files open in it first."
+  (( DRY )) && { print "(dry run: nothing changed)"; return 0 }
+  confirm "Convert $top:t?" || { print "cancelled"; return 1 }
+
+  local tmp=$top/.wt-convert-$$ e
+  stuck() {
+    warn "convert stopped partway; nothing was deleted. In $top: the repository is in .git or .bare,"
+    warn "your files are in $top itself, ${tmp:t}/ or $name/. Ask for help before retrying."
+    exit 1
+  }
+  mkdir $tmp || stuck
+  for e in $top/*(DN); do
+    [[ $e == $top/.git || $e == $tmp ]] && continue
+    mv -- $e $tmp/ || stuck
+  done
+  mv $top/.git $top/.bare || stuck
+  git --git-dir=$top/.bare config core.bare true || stuck
+  print 'gitdir: ./.bare' > $top/.git || stuck
+  git -C $top worktree add -q --no-checkout $wtdir $branch || stuck
+  for e in $tmp/*(DN); do
+    mv -- $e $wtdir/ || stuck
+  done
+  rmdir $tmp || stuck
+  rm -f $top/.bare/index           # the old checkout's index; the worktree has its own
+  git -C $wtdir reset -q || stuck  # rebuild the worktree's index from its branch
+  if [[ -n $(git -C $wtdir status --porcelain --untracked-files=no) ]]; then
+    warn "converted, but git status in $name/ shows changes; check it before doing anything else"
+  else
+    print -r -- "Converted: $top/.bare + $name/ (git status is clean)"
+  fi
+  [[ ${PWD:A} == $top || ${PWD:A} == $top/* ]] && print -r -- "Your files are now in $name/: cd $wtdir"
+  return 0
+}
+
+# --- Main ----------------------------------------------------------------------
+
+cmd=${1:-help}
+(( $# )) && shift
+if [[ $cmd != help && $cmd != -* ]] && (( ${@[(Ie)-h]} || ${@[(Ie)--help]} )); then
+  help_for $cmd; exit
+fi
+case $cmd in
+  new)            cmd_new "$@" ;;
+  switch|sw)      cmd_switch "$@" ;;
+  ls|list)        cmd_ls "$@" ;;
+  rm|remove)      cmd_rm "$@" ;;
+  prune)          cmd_prune "$@" ;;
+  convert)        cmd_convert "$@" ;;
+  help|-h|--help) if (( $# )); then help_for $1; else usage; fi ;;
+  *)              usage >&2; die "unknown command '$cmd'" ;;
+esac
