@@ -21,6 +21,7 @@
 # Ignore everything inside...
 .claude/*
 # Then whitelist...
+!.claude/CLAUDE.md
 !.claude/skills/
 !.claude/skills/**
 # ...except skills synced from claude.ai (downloaded automatically, not yours)

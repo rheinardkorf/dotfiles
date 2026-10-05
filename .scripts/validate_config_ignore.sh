@@ -21,6 +21,7 @@ should_track=(
   "$HOME/.scripts/install-dotfiles.sh"
   "$HOME/.scripts/seed-zoxide.sh"
   "$HOME/.scripts/wt"
+  "$HOME/.claude/CLAUDE.md"
   "$HOME/.claude/skills/test_skill/SKILL.md"
   "$HOME/.config/aerospace/aerospace.toml"
   "$HOME/.config/aerospace/nested/subfolder/test.toml"
