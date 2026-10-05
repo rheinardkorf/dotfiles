@@ -13,7 +13,6 @@ should_track=(
   "$HOME/.gitignore"
   "$HOME/.gitmodules"
   "$HOME/.gitconfig"
-  "$HOME/Brewfile"
   "$HOME/Brewfile.core"
   "$HOME/Brewfile.mantis"
   "$HOME/Brewfile.mando"
@@ -42,6 +41,10 @@ should_track=(
   "$HOME/.espanso/match/base.yml"
   "$HOME/.config/nushell/config.nu"
   "$HOME/.config/gh/config.yml"
+  "$HOME/.code_profiles/jsdev/data/User/settings.json"
+  "$HOME/.code_profiles/jsdev/data/User/keybindings.json"
+  "$HOME/.code_profiles/jsdev/data/User/snippets/js.json"
+  "$HOME/.code_profiles/newprofile/ext/extensions.json"
 )
 
 # A list of absolute paths that SHOULD be blocked by your * rules
@@ -65,6 +68,13 @@ should_ignore=(
   "$HOME/.config/nushell/history.txt"
   "$HOME/.config/nushell/history.sqlite3"
   "$HOME/.config/karabiner/automatic_backups/karabiner_20250211.json"
+  "$HOME/Brewfile"
+  "$HOME/.aliases"
+  "$HOME/.code_profiles/jsdev/ext/svelte.svelte-vscode-109.1.0/package.json"
+  "$HOME/.code_profiles/pydev/data/logs/20230101/main.log"
+  "$HOME/.code_profiles/pydev/data/CachedExtensionVSIXs/ms-python.python"
+  "$HOME/.code_profiles/pydev/data/machineid"
+  "$HOME/.code_profiles/nsdev/data/User/globalStorage/state.vscdb"
 )
 
 errors=0

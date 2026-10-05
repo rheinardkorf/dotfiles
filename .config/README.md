@@ -82,6 +82,7 @@ Add the path to `.scripts/validate_config_ignore.sh` too, then check:
 ## Machine-specific settings (not in this repo)
 
 - `~/.zshrc.local`: shell settings for this machine only (loaded by `.zshrc`)
+- `~/.aliases`: aliases for projects on this machine only (also loaded by `.zshrc`)
 - `~/.config/machine-name`: this machine's name
 - `~/.aws/config`: AWS profiles; `aws-mfa-login <profile>` reads the MFA device from there
 

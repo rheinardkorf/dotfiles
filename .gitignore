@@ -7,7 +7,6 @@
 !.gitignore
 !.gitmodules
 !.gitconfig
-!Brewfile
 !Brewfile.core
 !Brewfile.mantis
 !Brewfile.mando
@@ -32,8 +31,18 @@
 !.espanso/**
 
 # VSCode Profiles
+# Only each profile's settings and extension list: the installed extensions,
+# caches, logs and backups next to them are regenerated per machine
 !.code_profiles/
-!.code_profiles/**
+!.code_profiles/*/
+!.code_profiles/*/data/
+!.code_profiles/*/data/User/
+!.code_profiles/*/data/User/settings.json
+!.code_profiles/*/data/User/keybindings.json
+!.code_profiles/*/data/User/snippets/
+!.code_profiles/*/data/User/snippets/**
+!.code_profiles/*/ext/
+!.code_profiles/*/ext/extensions.json
 
 # Config files
 # ==============================
