@@ -43,15 +43,6 @@ hs.hotkey.bind(meh, "c", function()
     hs.execute(home .. "/.scripts/kitty-panel capture " .. home .. "/.scripts/capture --width=600 --height=300 --edge=center-sized --opacity=1", true)
 end)
 
--- Let Sketchybar know when window states have changed.
-hs.window.filter.default:subscribe(hs.window.filter.windowCreated, function(win)
-    hs.execute('sketchybar --trigger aerospace_window_change',true)
-end)
-
-hs.window.filter.default:subscribe(hs.window.filter.windowDestroyed, function(win)
-    hs.execute('sketchybar --trigger aerospace_window_change',true)
-end)
-
 -- Get the current window app id
 hs.hotkey.bind(hyper, "i", function()
     local app = hs.window.focusedWindow():application()

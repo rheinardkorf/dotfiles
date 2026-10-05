@@ -6,6 +6,6 @@ names="$(tmux list-windows -a -F '#{session_name}	#{@claude}' 2>/dev/null |
   awk -F'\t' -v cur="$1" '$2 == "waiting" && $1 != cur && !seen[$1]++ { printf "%s%s", (n++ ? " " : ""), $1 }')"
 [[ -n "$names" ]] || exit 0
 if [[ "${2:-}" == block ]]; then
-  exec "$(dirname "$0")/tmux-block.sh" @thm_yellow "󰂞 " "$names"
+  exec "$(dirname "$0")/tmux-block.sh" @claude_orange "󰚩 " "$names"
 fi
-printf '#[fg=colour0,bg=colour3,bold] 🔔 %s #[default] ' "$names"
+printf '#[fg=colour0,bg=#d97757,bold] 󰚩 %s #[default] ' "$names"

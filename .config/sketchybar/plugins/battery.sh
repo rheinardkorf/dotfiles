@@ -1,28 +1,27 @@
-#!/bin/sh
+#!/bin/bash
+# Battery level with Material Design icons (Nerd Font nf-md-battery*), in 10% steps.
+# On power: the charging icon at the current level, in green.
+# Otherwise: yellow at 30% or less, red at 15% or less.
+source "$CONFIG_DIR/colors.sh"
 
-PERCENTAGE="$(pmset -g batt | grep -Eo "\d+%" | cut -d% -f1)"
-CHARGING="$(pmset -g batt | grep 'AC Power')"
+LEVEL_ICONS=(󰂎 󰁺 󰁻 󰁼 󰁽 󰁾 󰁿 󰂀 󰂁 󰂂 󰁹)        # 0% (outline), 10% .. 90%, 100%
+CHARGING_ICONS=(󰢟 󰢜 󰂆 󰂇 󰂈 󰢝 󰂉 󰢞 󰂊 󰂋 󰂅)     # same steps, with a bolt
 
-if [ "$PERCENTAGE" = "" ]; then
-  exit 0
+BATT="$(pmset -g batt)"
+PERCENTAGE="$(grep -Eo '[0-9]+%' <<<"$BATT" | head -1 | tr -d %)"
+[ -n "$PERCENTAGE" ] || exit 0   # no battery (desktop Mac)
+
+STEP=$(( (PERCENTAGE + 5) / 10 ))   # nearest 10%
+[ "$STEP" -gt 10 ] && STEP=10
+
+if grep -q 'AC Power' <<<"$BATT"; then
+  ICON=${CHARGING_ICONS[STEP]}; COLOR=$GREEN_ICON
+else
+  ICON=${LEVEL_ICONS[STEP]}
+  if   [ "$PERCENTAGE" -le 15 ]; then COLOR=$RED_ICON
+  elif [ "$PERCENTAGE" -le 30 ]; then COLOR=$YELLOW_ICON
+  else                                COLOR=$WHITE
+  fi
 fi
 
-case "${PERCENTAGE}" in
-  9[0-9]|100) ICON=""
-  ;;
-  [6-8][0-9]) ICON=""
-  ;;
-  [3-5][0-9]) ICON=""
-  ;;
-  [1-2][0-9]) ICON=""
-  ;;
-  *) ICON=""
-esac
-
-if [[ "$CHARGING" != "" ]]; then
-  ICON=""
-fi
-
-# The item invoking this script (name $NAME) will get its icon and label
-# updated with the current battery status
-sketchybar --set "$NAME" icon="$ICON" label="${PERCENTAGE}%"
+sketchybar --set "$NAME" icon="$ICON" icon.color="$COLOR" label="${PERCENTAGE}%"

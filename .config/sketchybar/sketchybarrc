@@ -5,12 +5,12 @@ source "$CONFIG_DIR/colors.sh"
 PLUGIN_DIR="$CONFIG_DIR/plugins"
 ITEM_DIR="$CONFIG_DIR/items"
 
-sketchybar --bar height=30        \
+sketchybar --bar height=32        \
                  blur_radius=30   \
                  position=top     \
                  sticky=off       \
-                 padding_left=0  \
-                 padding_right=0 \
+                 padding_left=10 \
+                 padding_right=10 \
                  color=$BAR_COLOR
 
 default=(
@@ -24,37 +24,33 @@ default=(
   label.color=$WHITE
   label.padding_left=4
   label.padding_right=4
-  background.color=$ITEM_BG_COLOR
-  background.corner_radius=0
-  background.height=25
+  background.drawing=off   # items sit directly on the bar
 )
 sketchybar --default "${default[@]}"
 
 # -- Events --
-sketchybar --add event aerospace_workspace_change
-sketchybar --add event aerospace_window_change
+sketchybar --add event aerospace_workspace_change   # triggered by aerospace.toml
 
 # -- Left Items --
-source $ITEM_DIR/hostname.sh
-source $ITEM_DIR/aerospace.sh
-source $ITEM_DIR/front_app.sh
-
-# -- Right of Notch Items --
-source $ITEM_DIR/camera_status.sh
-source $ITEM_DIR/mic_status.sh
-
+source $ITEM_DIR/active_workspace.sh  # just the focused workspace
+source $ITEM_DIR/claude.sh            # Claude sessions waiting for you (only when any)
 
 # -- Right Items
+# Right items are placed right to left: the first one sourced sits at the edge
+source $ITEM_DIR/privacy_dot.sh   # where macOS shows its camera/mic/screen-recording dot
+source $ITEM_DIR/ping.sh
 source $ITEM_DIR/calendar.sh
 source $ITEM_DIR/battery.sh
 source $ITEM_DIR/volume.sh
-source $ITEM_DIR/cpu.sh
-source $ITEM_DIR/gpu.sh
-source $ITEM_DIR/ping.sh
+source $ITEM_DIR/load.sh   # cpu + gpu, only while busy
 
-# Right items sit directly on the bar (no grey block behind them)
-for item in calendar battery volume cpu gpu ping; do
-  sketchybar --set "$item" background.drawing=off
+# The same spacing between all right items (~14pt)
+for item in calendar ping battery volume cpu gpu; do
+  sketchybar --set "$item" padding_left=3 padding_right=3
+done
+# Icon and number close together (~4pt) so each item reads as one unit
+for item in battery volume cpu gpu; do
+  sketchybar --set "$item" icon.padding_right=0 label.padding_left=3
 done
 
 ##### Force all scripts to run the first time (never do this in a script) #####

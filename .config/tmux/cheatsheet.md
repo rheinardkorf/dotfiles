@@ -45,9 +45,9 @@
    prefix `       floating scratch shell
 
  CLAUDE AGENTS (markers set by Claude Code hooks)
-   🔔 on a window  Claude is waiting for you (permission / question)
+   󰚩 on a window  Claude is waiting for you (permission / question); orange
    ✓  on a window  Claude finished; go have a look
-   🔔 name (right)  a Claude is waiting in another session
+   󰚩 name (right)  a Claude is waiting in another session
                   markers clear when you reply
 
  COPY / SCROLL
