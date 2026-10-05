@@ -10,9 +10,9 @@ WORKSPACE=$1
 case "$EVENT_NAME" in
 "aerospace_workspace_change" | "forced")
     if [ "$WORKSPACE" = "$(aerospace list-workspaces --focused)" ]; then
-        sketchybar --set space.label.$WORKSPACE background.color=$ACTIVE_COLOR
+        sketchybar --set space.label.$WORKSPACE background.color=$ACTIVE_COLOR label.color=$DARK_TEXT
     else
-        sketchybar --set space.label.$WORKSPACE background.color=$INACTIVE_COLOR
+        sketchybar --set space.label.$WORKSPACE background.color=$INACTIVE_COLOR label.color=$WHITE_TRANSPARENT
     fi
     ;;
 "aerospace_window_change" | "routine")
@@ -45,7 +45,7 @@ case "$EVENT_NAME" in
                 label.padding_left=0 \
                 label.padding_right=0 \
                 icon.color=$WHITE_TRANSPARENT \
-                background.color=0x00000000 \
+                background.color=$TRANSPARENT \
                 background.padding_left=0 \
                 background.padding_right=0 \
                 click_script="aerospace workspace $WORKSPACE"

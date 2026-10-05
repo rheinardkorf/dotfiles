@@ -19,6 +19,6 @@ sketchybar --set $NAME icon="󰄀" \
                        icon.padding_right=0 \
                        icon.padding_left=0 \
                        icon.color=$COLOR \
-                       background.color=0x00000000
+                       background.color=$TRANSPARENT
 
 

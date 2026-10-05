@@ -1,5 +1,7 @@
 #!/bin/bash
 
+source "$CONFIG_DIR/colors.sh"
+
 # Machine name from ~/.config/machine-name (the MDM controls the computer name),
 # falling back to the system name if that file doesn't exist
 HOSTNAME=$(head -n1 "$HOME/.config/machine-name" 2>/dev/null | tr -d '[:space:]')
@@ -8,13 +10,13 @@ HOSTNAME=$(head -n1 "$HOME/.config/machine-name" 2>/dev/null | tr -d '[:space:]'
 # Set color based on hostname
 case "$HOSTNAME" in
   "mantis")
-    COLOR=0xff9d627d
+    COLOR=$HOST_MANTIS_COLOR
     ;;
   "mando")
-    COLOR=0xff629d82
+    COLOR=$HOST_MANDO_COLOR
     ;;
   *)
-    COLOR=0xff61849e
+    COLOR=$HOST_OTHER_COLOR
     ;;
 esac
 
@@ -22,6 +24,8 @@ esac
 sketchybar --set $NAME icon=󰌢 \
                        label="$HOSTNAME" \
                        background.color=$COLOR \
+                       icon.color=$DARK_TEXT \
+                       label.color=$DARK_TEXT \
                        icon.padding_right=0 \
                        icon.padding_left=5
 

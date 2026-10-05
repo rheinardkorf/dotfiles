@@ -15,7 +15,7 @@ for sid in $ALL_WORKSPACES; do
         update_freq=5 \
         label="$sid" \
         label.color=$WHITE_TRANSPARENT \
-        background.color=0x00000000 \
+        background.color=$TRANSPARENT \
         icon.padding_left=0 \
         icon.padding_right=0 \
         label.padding_left=2 \
