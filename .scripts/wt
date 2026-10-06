@@ -54,6 +54,7 @@ Where the branch comes from:
   - it exists on origin               -> check it out, tracking origin/<branch>
   - otherwise                         -> new branch from origin/<default> (or -b <base>)
 
+Submodules are fetched and checked out in the new worktree.
 Outside tmux it prints the folder to cd into (or, with -s, starts tmux there).
 
   wt new fix-login
@@ -147,8 +148,11 @@ Turns the plain clone you're in into the .bare layout:
 Checks git status afterwards. Close editors open in the repo first; tmux
 panes there stay open but need to cd into <branch>/.
 
+Submodules move with your files and their git data is re-linked for the new
+layout (submodules that have submodules of their own aren't supported).
+
 Refuses if there are uncommitted changes to tracked files, other worktrees,
-submodules, a merge or rebase in progress, or a detached HEAD.
+nested submodules, a merge or rebase in progress, or a detached HEAD.
 
   --dry-run  show the plan only
   -y         don't ask
@@ -419,6 +423,15 @@ cmd_switch() {
 
 # --- Commands ------------------------------------------------------------------
 
+# init_submodules <dir>: check out a fresh worktree's submodules (git worktree
+# add leaves them empty). A failure only warns: the worktree itself is fine.
+init_submodules() {
+  [[ -f $1/.gitmodules ]] || return 0
+  print "fetching submodules..."
+  git -C $1 submodule update -q --init --recursive ||
+    warn "couldn't fetch the submodules; run 'git submodule update --init --recursive' in $1:t"
+}
+
 cmd_new() {
   local session=0 base= branch=
   while (( $# )); do
@@ -446,12 +459,14 @@ cmd_new() {
     [[ -n $base ]] && warn "$branch already exists; ignoring -b"
     g worktree add -q $dir $branch || die "couldn't create the worktree"
     print "created worktree for existing branch $branch"
+    init_submodules $dir
   else
     g fetch -q origin 2>/dev/null || warn "couldn't fetch origin; using what's already here"
     if has_ref refs/remotes/origin/$branch; then
       [[ -n $base ]] && warn "origin/$branch exists; using it and ignoring -b"
       g worktree add -q --track -b $branch $dir origin/$branch || die "couldn't create the worktree"
       print "created $branch, tracking origin/$branch"
+      init_submodules $dir
     else
       if [[ -z $base ]]; then
         base=$(default_branch) || die "couldn't work out the default branch; pass -b <base>"
@@ -461,6 +476,7 @@ cmd_new() {
       g rev-parse -q --verify "$start^{commit}" >/dev/null || die "base branch '$base' not found"
       g worktree add -q --no-track -b $branch $dir $start || die "couldn't create the worktree"
       print "created $branch from $start"
+      init_submodules $dir
     fi
   fi
   open_in_tmux $dir $session
@@ -550,16 +566,21 @@ remove_worktrees() {
     confirm "Go ahead?" || { print "cancelled"; return 1 }
   fi
 
-  local -a done_msgs
+  local -a done_msgs rmflags
+  local failed=0
   for i in "$@"; do
     p=$WT_PATHS[i] b=$WT_BRANCHES[i]
     if [[ -d $p ]]; then
-      if (( $(count_changes $p) )) && may_discard "$b" $base; then
-        g worktree remove --force $p
-      else
-        g worktree remove $p
-      fi ||
-        { warn "couldn't remove $p:t (locked?); skipping"; continue }
+      rmflags=()
+      if (( $(count_changes $p) )); then
+        may_discard "$b" $base && rmflags=(--force)
+      elif [[ -f $p/.gitmodules ]]; then
+        # git refuses worktrees with submodules without --force; it's clean
+        # (git status counts changes inside submodules too), so that's safe
+        rmflags=(--force)
+      fi
+      g worktree remove $rmflags $p ||
+        { warn "git couldn't remove $p:t (see above); skipping"; failed=1; continue }
     else
       g worktree prune
     fi
@@ -577,7 +598,7 @@ remove_worktrees() {
   done
   CLOSE_MSG="wt: ${(j:, :)done_msgs}"
   (( $#ids )) && close_panes "$home" $ids
-  return 0
+  return $failed
 }
 
 cmd_rm() {
@@ -651,7 +672,18 @@ cmd_convert() {
   branch=$(git -C $top symbolic-ref -q --short HEAD) || die "HEAD is detached; check out a branch first"
   local -a wts=(${(f)"$(git -C $top worktree list --porcelain | grep '^worktree ')"})
   (( $#wts == 1 )) || die "this clone has other worktrees (git worktree list); remove them first"
-  [[ -e $top/.gitmodules ]] && die "repos with submodules aren't supported"
+  # Submodules: name/path pairs from .gitmodules. Nested ones (a submodule
+  # with submodules of its own) aren't supported.
+  local -a sub_names sub_paths
+  local key val
+  if [[ -f $top/.gitmodules ]]; then
+    while read -r key val; do
+      key=${key#submodule.}; sub_names+=(${key%.path}); sub_paths+=($val)
+    done < <(git -C $top config -f .gitmodules --get-regexp '^submodule\..*\.path$')
+    for val in $sub_paths; do
+      [[ -f $top/$val/.gitmodules ]] && die "submodule $val has submodules of its own; wt convert doesn't support nested submodules"
+    done
+  fi
   local d
   for d in MERGE_HEAD CHERRY_PICK_HEAD REVERT_HEAD rebase-merge rebase-apply; do
     [[ -e $top/.git/$d ]] && die "a merge or rebase is in progress; finish it first"
@@ -672,6 +704,7 @@ cmd_convert() {
   print -r -- "  2. your files  -> $name/   (everything else, as is)"
   print -r -- "  3. $name/ becomes the worktree for '$branch'"
   (( $#extra )) && print -r -- "  Untracked and ignored files ($#extra, e.g. node_modules, .env) move with it."
+  (( $#sub_paths )) && print -r -- "  Submodules ($#sub_paths: ${(j:, :)sub_paths}) move with it; their git data is re-linked for the new layout."
   if (( $#panes )); then
     print "tmux panes open in it (they stay open; cd into $name/ afterwards):"
     local line
@@ -690,6 +723,18 @@ cmd_convert() {
     warn "your files are in $top itself, ${tmp:t}/ or $name/. Ask for help before retrying."
     exit 1
   }
+  # Submodule git data normally lives in .git/modules/<name>, linked by relative
+  # paths that break when the files move. Put each one inside its submodule
+  # first (still a valid repo if anything stops here); git moves it back into
+  # .bare for the new worktree at the end (absorbgitdirs).
+  local k mod
+  for (( k = 1; k <= $#sub_paths; k++ )); do
+    mod=$top/.git/modules/$sub_names[k]
+    if [[ -f $top/$sub_paths[k]/.git && -d $mod ]]; then
+      rm $top/$sub_paths[k]/.git && mv $mod $top/$sub_paths[k]/.git || stuck
+      git --git-dir=$top/$sub_paths[k]/.git config --unset core.worktree 2>/dev/null
+    fi
+  done
   mkdir $tmp || stuck
   for e in $top/*(DN); do
     [[ $e == $top/.git || $e == $tmp ]] && continue
@@ -705,6 +750,10 @@ cmd_convert() {
   rmdir $tmp || stuck
   rm -f $top/.bare/index           # the old checkout's index; the worktree has its own
   git -C $wtdir reset -q || stuck  # rebuild the worktree's index from its branch
+  if (( $#sub_paths )); then
+    git -C $wtdir submodule absorbgitdirs >/dev/null 2>&1 ||
+      warn "couldn't re-link the submodules' git data; run 'git submodule absorbgitdirs' in $name/"
+  fi
   if [[ -n $(git -C $wtdir status --porcelain --untracked-files=no) ]]; then
     warn "converted, but git status in $name/ shows changes; check it before doing anything else"
   else
