@@ -62,6 +62,20 @@ config commit -m "Ghostty: bigger font"
 config push
 ```
 
+## Shell history and kept commands
+
+History lasts as long as the tmux session: its panes share it, and it's deleted
+when the session closes. Outside tmux it's gone when the shell exits. Nothing
+goes to `~/.zsh_history`. Commands worth remembering are kept on purpose:
+
+```bash
+keep "convert video to gif"   # save the last command to ~/.config/zsh/commands.txt
+keep -l "staging db"          # or to ~/.commands.local (machine-specific, not in this repo)
+# Ctrl-G                      # pick a kept command onto the prompt
+```
+
+`commands.txt` is public: hosts, tokens and client names go in `~/.commands.local`.
+
 ## Adding a new app's config
 
 `~/.gitignore` is an allowlist: it ignores everything, then lets specific paths
@@ -83,6 +97,7 @@ Add the path to `.scripts/validate_config_ignore.sh` too, then check:
 
 - `~/.zshrc.local`: shell settings for this machine only (loaded by `.zshrc`)
 - `~/.aliases`: aliases for projects on this machine only (also loaded by `.zshrc`)
+- `~/.commands.local`: kept commands for this machine only (`keep -l`, picked with Ctrl-G)
 - `~/.config/machine-name`: this machine's name
 - `~/.aws/config`: AWS profiles; `aws-mfa-login <profile>` reads the MFA device from there
 

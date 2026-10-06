@@ -1,0 +1,4 @@
+# Commands worth keeping. Add with `keep [note]` right after running one,
+# pick with Ctrl-G. Machine-specific or sensitive ones go in ~/.commands.local.
+#
+# Format: optional "# note" lines, then the command; blank line between entries.

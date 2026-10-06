@@ -11,6 +11,9 @@
    t .  / t <dir> session for the current / given directory
    ta             attach to the last session (or start "main")
    z <name>       cd via zoxide (also teaches sesh your favourite dirs)
+   keep [note]    keep the last command (-l: this machine only, not in dotfiles)
+   Ctrl-g         pick a kept command onto the prompt
+                  (history is per session: gone when the session closes)
 
  SESSIONS (sesh)
    prefix f       sesh picker (popup)
