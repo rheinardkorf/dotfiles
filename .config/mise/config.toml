@@ -2,7 +2,7 @@
 # Node only for now: Go, Python and Rust come from Homebrew (Brewfile.core).
 
 [tools]
-node = "24"
+node = "26"
 
 [settings]
 # Read the version files nvm used (.nvmrc, .node-version) as well as mise.toml
