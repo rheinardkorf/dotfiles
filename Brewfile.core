@@ -2,13 +2,12 @@
 # Installed (only if missing, never upgraded) by ~/.scripts/bootstrap.sh.
 # Apps only one machine needs don't belong here.
 
-# Terminal workflow (tmux + sesh + Ghostty)
+# Terminal workflow (kitty + tmux + sesh)
 brew "tmux"                  # terminal multiplexer
 brew "sesh"                  # tmux session picker (Cmd-n / prefix f / Ctrl-f)
 brew "zoxide"                # frecent folders for sesh, and `z`
 brew "gitmux"                # git block in the tmux bar
 cask "kitty"                 # terminal (cross-platform; config in ~/.config/kitty)
-cask "ghostty@tip"           # terminal
 cask "font-hack-nerd-font"   # icons in the tmux bar and sesh picker
 
 # Shell and editor (needed by the zsh and nvim configs)

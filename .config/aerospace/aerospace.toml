@@ -9,8 +9,8 @@ after-login-command = []
 after-startup-command = [
   # JankyBorders has a built-in detection of already running process,
   # so it won't be run twice on AeroSpace restart
-  # Thin rounded borders (match macOS); none on Ghostty, whose window has no frame
-  'exec-and-forget borders active_color=0xffcba6f7 inactive_color=0x00494d64 width=2.0 style=round blacklist="Ghostty,ghostty,Kitty,kitty,net.kovidgoyal.kitty"',
+  # Thin rounded borders (match macOS); none on kitty, whose window has no frame
+  'exec-and-forget borders active_color=0xffcba6f7 inactive_color=0x00494d64 width=2.0 style=round blacklist="Kitty,kitty,net.kovidgoyal.kitty"',
 ]
 start-at-login = true
 enable-normalization-flatten-containers = true
@@ -142,12 +142,17 @@ shift-down = ['volume set 0', 'mode main']
 
 # App specific config
 
+# First: only the first matching rule runs, and kitty panels must float
+[[on-window-detected]]
+if.window-title-regex-substring = '^panel-'
+run = ['layout floating']
+
 [[on-window-detected]]
 if.app-name-regex-substring = 'Brave Browser'
 run = ['move-node-to-workspace 1']
 
 [[on-window-detected]]
-if.app-id = 'com.mitchellh.ghostty'
+if.app-id = 'net.kovidgoyal.kitty'
 run = ['move-node-to-workspace 2']
 
 [[on-window-detected]]
@@ -160,9 +165,5 @@ run = ['move-node-to-workspace 4']
 
 [[on-window-detected]]
 if.app-id = 'com.apple.PhotoBooth'
-run = ['layout floating']
-
-[[on-window-detected]]
-if.window-title-regex-substring = '^panel-'
 run = ['layout floating']
 

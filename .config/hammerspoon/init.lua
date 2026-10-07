@@ -22,9 +22,9 @@ hs.hotkey.bind(meh, "d", function()
     hs.application.launchOrFocus("Calendar")
 end)
 
--- Bind hyper + t to launch Ghostty
+-- Bind hyper + t to launch kitty
 hs.hotkey.bind(hyper, "t", function()
-    hs.application.launchOrFocus("Ghostty")
+    hs.application.launchOrFocus("kitty")
 end)
 
 -- Bind hyper + b to launch Brave
