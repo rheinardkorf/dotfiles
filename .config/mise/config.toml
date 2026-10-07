@@ -1,8 +1,17 @@
 # Global tool versions; a project's mise.toml, .nvmrc or .node-version overrides them.
-# Node only for now: Go, Python and Rust come from Homebrew (Brewfile.core).
+# Node and Node-based CLIs: Go, Python and Rust come from Homebrew (Brewfile.core).
+# Tools only one machine needs go in ~/.config/mise/config.local.toml (not in dotfiles).
 
 [tools]
 node = "26"
+
+# Global CLIs, tracking latest. Project tools (osls/serverless, aws-cdk, ...) are
+# not here on purpose: each project declares its own version.
+"npm:dynamodb-admin" = "latest"   # dynamodb-admin (web UI for local DynamoDB), from npm
+# pnpm: mise's own tool (official binary). Not npm:pnpm: pnpm 12 swaps in a
+# native binary during npm install, a step mise's npm installer skips. pnpm then
+# switches to the version a project pins (packageManager).
+pnpm = "latest"
 
 [settings]
 # Read the version files nvm used (.nvmrc, .node-version) as well as mise.toml
