@@ -1,0 +1,9 @@
+# Global tool versions; a project's mise.toml, .nvmrc or .node-version overrides them.
+# Node only for now: Go, Python and Rust come from Homebrew (Brewfile.core).
+
+[tools]
+node = "24"
+
+[settings]
+# Read the version files nvm used (.nvmrc, .node-version) as well as mise.toml
+idiomatic_version_file_enable_tools = ["node"]

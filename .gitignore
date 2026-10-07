@@ -59,6 +59,8 @@
 !.config/ghostty/**
 !.config/kitty/
 !.config/kitty/**
+!.config/mise/
+!.config/mise/config.toml
 !.config/hammerspoon/
 !.config/hammerspoon/**
 !.config/iterm2/

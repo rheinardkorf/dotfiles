@@ -14,7 +14,7 @@ cask "font-hack-nerd-font"   # icons in the tmux bar and sesh picker
 # Shell and editor (needed by the zsh and nvim configs)
 brew "fzf"                   # fuzzy finder; 10-fzf.zsh loads it in every shell
 brew "fd"                    # file search used by the fzf setup
-brew "nvm"                   # Node versions (lazy-loaded by 99-nvm.zsh)
+brew "mise"                  # Node versions per project (99-mise.zsh, ~/.config/mise)
 brew "neovim"                # editor
 brew "ripgrep"               # project search (LazyVim)
 brew "lazygit"               # git UI; LazyVim opens it with <leader>gg
