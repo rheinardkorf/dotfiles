@@ -2,7 +2,7 @@
  ─────────────────────────────────────────────────────────────────────────
 
  THE MENTAL MODEL
-   session  = a project        (replaces "a Ghostty window per project")
+   session  = a project        (replaces "a terminal window per project")
    window   = a tab            (editor / server / git ...)
    pane     = a split inside a window
 

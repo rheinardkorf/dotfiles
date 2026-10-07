@@ -57,8 +57,8 @@ upgrades:
 
 ```bash
 config status
-config add .config/ghostty/config
-config commit -m "Ghostty: bigger font"
+config add .config/kitty/kitty.conf
+config commit -m "kitty: bigger font"
 config push
 ```
 
