@@ -36,6 +36,7 @@ brew "tree"                  # folder trees
 brew "ncdu"                  # find what's using disk space (interactive)
 brew "wget"                  # downloads (many install instructions assume it)
 brew "httpie"                # friendlier curl for APIs: http GET example.com
+brew "glow"                  # render Markdown in the terminal: glow file.md, glow -p to page
 brew "pandoc"                # convert between Markdown, Word, HTML, PDF, ...
 brew "trash"                 # move files to the Trash instead of deleting
 brew "awscli"                # AWS CLI (used by aws-mfa-login)
