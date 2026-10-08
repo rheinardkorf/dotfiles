@@ -58,19 +58,22 @@ keep() {
   print "Kept in ${file/#$HOME/~}: $cmd"
 }
 
-# Ctrl-G: fuzzy-pick a kept command. Searches notes and commands; the command
-# lands on the prompt to edit or run.
+# Ctrl-G: fuzzy-pick a kept command, listed as "command : note". Searches notes
+# and commands; the command lands on the prompt to edit or run.
 _keep_pick() {
   local -a files=($KEEP_FILE(N) $KEEP_LOCAL(N))
   (( $#files )) || { zle -M "No kept commands yet (keep [note] saves the last one)"; return }
 
+  # Each line is "<shown>\t<command>": fzf shows field 1, the pick keeps the rest,
+  # so a " : " or tab inside the command can't be mistaken for the separator
   local picked
   picked="$(awk '
       /^[[:space:]]*$/ { note = ""; next }
       /^#/ { sub(/^#[[:space:]]*/, ""); note = (note == "" ? $0 : note " " $0); next }
-      { print (note == "" ? "-" : note) "\t" $0; note = "" }
+      { shown = $0; gsub(/\t/, " ", shown)
+        print shown (note == "" ? "" : " : " note) "\t" $0; note = "" }
     ' $files |
-    fzf --height 40% --reverse --delimiter '\t' --prompt 'kept> ' |
+    fzf --height 40% --reverse --delimiter '\t' --with-nth 1 --prompt 'kept> ' |
     cut -f2-)"
 
   if [[ -n $picked ]]; then
