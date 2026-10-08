@@ -41,7 +41,7 @@ should_track=(
   "$HOME/.config/tmux/scripts/prune-history.sh"
   "$HOME/.config/zsh/commands.txt"
   "$HOME/.config/zsh/functions/aws"
-  "$HOME/.config/karabiner/karabiner.edn"
+  "$HOME/.config/karabiner/karabiner.json"
   "$HOME/.espanso/match/base.yml"
   "$HOME/.config/nushell/config.nu"
   "$HOME/.config/gh/config.yml"
