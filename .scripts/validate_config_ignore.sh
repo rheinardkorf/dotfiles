@@ -68,6 +68,7 @@ should_ignore=(
   "$HOME/.config/xdash/ssh_host_key"
   "$HOME/.config/cursor/plans/some.plan.md"
   "$HOME/.claude/skills/synced/some-skill/SKILL.md"
+  "$HOME/.claude/skills/.trash/123-abc/some-skill/SKILL.md"
   "$HOME/.config/zsh/.DS_Store"
   "$HOME/Brewfile.local"
   "$HOME/.config/nushell/history.txt"

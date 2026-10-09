@@ -25,6 +25,8 @@
 !.claude/skills/**
 # ...except skills synced from claude.ai (downloaded automatically, not yours)
 .claude/skills/synced/
+# ...and the sync's retired copies
+.claude/skills/.trash/
 
 # Espanso (text expansion)
 !.espanso/
