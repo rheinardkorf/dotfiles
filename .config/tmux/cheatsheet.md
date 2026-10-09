@@ -31,6 +31,8 @@
 
  WINDOWS
    prefix c       new window (same dir)
+   prefix a       arrange 1 claude  2 zsh  (moves or creates them; Claude starts or
+                  continues there if it was quit) and go to claude
    prefix 1..9    go to window N
    prefix n / p   next / previous window
    prefix C-Space toggle last window
