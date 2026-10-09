@@ -2,3 +2,7 @@
 # pick with Ctrl-G. Machine-specific or sensitive ones go in ~/.commands.local.
 #
 # Format: optional "# note" lines, then the command; blank line between entries.
+
+# Pull remote dotfiles
+config pull --ff-only
+
