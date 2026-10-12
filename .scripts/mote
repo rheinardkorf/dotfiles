@@ -1,0 +1,324 @@
+#!/usr/bin/env node
+// mote: talk to the notify-me mote over USB serial (docs/serial-protocol.md). Zero dependencies.
+//
+//   mote buzz <alert>              tap | tap2 | tap3 | long | burst | ring | alarm | alarm+
+//   mote buzz pattern <a>,<b>,...  alerts in order
+//   mote stop                      stop the playing alert and drop the waiting one
+//   mote status [--json | --raw]   band link, battery, today's totals, mote health (no band requests)
+//   mote connected                 exit 0 if the band is connected, else 1
+//   mote port                      the mote's serial port (checked with PING)
+//   mote config get <key> | set <key> <value>
+//   mote history [<dir>]           download the band's raw history packets to <dir>/<stamp>.hex
+//   mote reboot
+//
+// Exit codes: 0 ok, 1 firmware ERR (or not connected), 2 usage, 3 no mote, 4 timeout or port busy.
+// Every call first sets the mote's clock from this Mac (TIME). Every call is logged to ~/Library/Logs/notify-me.log. NOTIFY_ME_PORT overrides port detection.
+"use strict";
+
+const { execFileSync } = require("node:child_process");
+const fs = require("node:fs");
+const os = require("node:os");
+const path = require("node:path");
+const tty = require("node:tty");
+
+const ESPRESSIF_VID = 0x303a;
+const USB_JTAG_PID = 0x1001;
+const PICK_TIMEOUT_MS = 500; // PING per candidate when several Espressif boards are plugged in
+const LOG_FILE = path.join(os.homedir(), "Library", "Logs", "notify-me.log");
+const LOCK_FILE = path.join(os.tmpdir(), "notify-me.lock");
+const LOCK_WAIT_MS = 2000;
+const LOCK_STALE_MS = 15000;
+const LOCK_TOUCH_MS = 5000; // long requests (history) keep the lock fresh
+const HISTORY_DIR = path.join(os.homedir(), "Library", "Application Support", "notify-me", "history");
+const HISTORY_TIMEOUT_MS = 120000; // firmware gives up after 12 s of quiet or 90 s of waiting
+const SETTLE_MS = 30; // discard stale output buffered before the port was opened
+const PROTOCOL = /^(OK|ERR|DATA|EVT|LOG)( |$)/;
+const ALERTS = ["tap", "tap2", "tap3", "long", "burst", "ring", "alarm", "alarm+"];
+
+class CliError extends Error {
+  constructor(code, message) {
+    super(message);
+    this.exitCode = code;
+  }
+}
+
+// --- port ------------------------------------------------------------------------------------
+
+// Serial ports of Espressif USB-Serial/JTAG devices. Each USB device is a top-level "+-o" block; the serial port
+// path lives inside it.
+function parseIoreg(out) {
+  const found = [];
+  for (const block of out.split(/\n(?=\+-o )/)) {
+    const vid = Number(block.match(/"idVendor" = (\d+)/)?.[1]);
+    const pid = Number(block.match(/"idProduct" = (\d+)/)?.[1]);
+    const callout = block.match(/"IOCalloutDevice" = "([^"]+)"/)?.[1];
+    if (vid === ESPRESSIF_VID && pid === USB_JTAG_PID && callout) found.push(callout);
+  }
+  return found;
+}
+
+// No device serial in code: one Espressif board is taken as the mote; with several, the first whose PING answers
+// "notify-me" wins. Call inside the lock (it may talk to the ports).
+async function findPort() {
+  if (process.env.NOTIFY_ME_PORT) return process.env.NOTIFY_ME_PORT;
+  const out = execFileSync("ioreg", ["-r", "-c", "IOUSBHostDevice", "-l", "-w0"], { encoding: "utf8" });
+  const ports = parseIoreg(out);
+  if (ports.length === 1) return ports[0];
+  for (const port of ports) {
+    try {
+      const lines = await request(port, "PING", PICK_TIMEOUT_MS);
+      if (lines[lines.length - 1].startsWith("OK notify-me")) return port;
+    } catch {}
+  }
+  throw new CliError(3, "notify-me mote not found on USB");
+}
+
+// --- lock ------------------------------------------------------------------------------------
+
+async function withLock(fn) {
+  const start = Date.now();
+  for (;;) {
+    try {
+      fs.closeSync(fs.openSync(LOCK_FILE, "wx"));
+      break;
+    } catch (e) {
+      if (e.code !== "EEXIST") throw e;
+      try {
+        if (Date.now() - fs.statSync(LOCK_FILE).mtimeMs > LOCK_STALE_MS) fs.rmSync(LOCK_FILE, { force: true });
+      } catch {}
+      if (Date.now() - start > LOCK_WAIT_MS) throw new CliError(4, "port busy (another mote command is running)");
+      await new Promise((r) => setTimeout(r, 50));
+    }
+  }
+  const now = () => new Date();
+  const touch = setInterval(() => {
+    try {
+      fs.utimesSync(LOCK_FILE, now(), now());
+    } catch {}
+  }, LOCK_TOUCH_MS);
+  try {
+    return await fn();
+  } finally {
+    clearInterval(touch);
+    fs.rmSync(LOCK_FILE, { force: true });
+  }
+}
+
+// --- one request -----------------------------------------------------------------------------
+
+// Collect protocol lines until the terminal OK/ERR line. Non-protocol lines (stale boot text) are skipped.
+// onLine (optional) sees each DATA/OK/ERR line as it arrives.
+function lineCollector(onDone, onLine = () => {}) {
+  let buf = "";
+  const lines = [];
+  return (chunk) => {
+    buf += chunk;
+    let i;
+    while ((i = buf.indexOf("\n")) >= 0) {
+      const line = buf.slice(0, i).replace(/\r$/, "");
+      buf = buf.slice(i + 1);
+      if (!PROTOCOL.test(line)) continue;
+      if (line.startsWith("EVT ") || line.startsWith("LOG ")) continue;
+      lines.push(line);
+      onLine(line);
+      if (/^(OK|ERR)( |$)/.test(line)) return onDone(lines);
+    }
+  };
+}
+
+function request(port, line, timeoutMs, onLine) {
+  return new Promise((resolve, reject) => {
+    let fd;
+    try {
+      fd = fs.openSync(port, fs.constants.O_RDWR | fs.constants.O_NOCTTY | fs.constants.O_NONBLOCK);
+    } catch (e) {
+      return reject(new CliError(3, `can't open ${port}: ${e.code}`));
+    }
+    const input = new tty.ReadStream(fd);
+    input.setRawMode(true);
+    const output = new tty.WriteStream(fd);
+    let sent = false;
+    const finish = (err, lines) => {
+      clearTimeout(timer);
+      input.removeAllListeners("data");
+      input.destroy();
+      output.destroy();
+      err ? reject(err) : resolve(lines);
+    };
+    const collect = lineCollector((lines) => finish(null, lines), onLine);
+    input.on("data", (chunk) => sent && collect(chunk.toString("latin1")));
+    const timer = setTimeout(() => finish(new CliError(4, `no reply to ${line.split(" ")[0]} (timeout)`)), timeoutMs);
+    setTimeout(() => {
+      sent = true;
+      output.write(line + "\n");
+    }, SETTLE_MS);
+  });
+}
+
+function timeLine(d = new Date()) {
+  return `TIME ${Math.floor(d.getTime() / 1000)} ${-d.getTimezoneOffset()}`;
+}
+
+// The mote decides when the band's clock needs setting, so this is cheap. An ERR (older firmware) is ignored.
+async function session(port, line, timeoutMs, onLine) {
+  await request(port, timeLine(), 3000);
+  return request(port, line, timeoutMs, onLine);
+}
+
+async function ask(line, timeoutMs = 2000, onLine) {
+  return checked(await withLock(async () => session(await findPort(), line, timeoutMs, onLine)));
+}
+
+function checked(lines) {
+  const last = lines[lines.length - 1];
+  if (last.startsWith("ERR")) {
+    const [, code, ...msg] = last.split(" ");
+    throw new CliError(1, `${code}: ${msg.join(" ")}`);
+  }
+  return lines;
+}
+
+function fields(okLine) {
+  const out = {};
+  for (const m of okLine.matchAll(/(\S+)=(\S*)/g)) out[m[1]] = m[2];
+  return out;
+}
+
+function duration(s) {
+  s = Number(s);
+  if (s < 60) return `${s}s`;
+  if (s < 3600) return `${Math.floor(s / 60)}m`;
+  return `${Math.floor(s / 3600)}h${String(Math.floor((s % 3600) / 60)).padStart(2, "0")}m`;
+}
+
+function formatStatus(f) {
+  const lines = [f.band === "unset" ? "band     not set up: mote config set band.addr <addr>, then mote reboot"
+    : `band     ${f.band} for ${duration(f.since)} (${f.addr})`];
+  if (f.battery !== "-1") lines.push(`battery  ${f.battery}%`);
+  if (f.steps !== "-1") lines.push(`today    ${f.steps} steps, ${f.dist} m, ${f.kcal} kcal`);
+  lines.push(`mote     fw ${f.fw}, up ${duration(f.uptime)}, heap ${f.mem_free} B free, ble ${f.idf_free} B free`);
+  return lines.join("\n");
+}
+
+function stamp(d = new Date()) {
+  const p = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
+}
+
+// The band clears history once the mote ACKs it, so each packet is written out as soon as it arrives.
+// <dir>/<yyyymmdd-hhmmss>.hex: one band packet per line, in hex, as received. Decoding is a separate tool.
+async function history(dir, print) {
+  await withLock(async () => {
+    const port = await findPort(); // before creating anything: exit 3 leaves no empty file
+    fs.mkdirSync(dir, { recursive: true });
+    const file = path.join(dir, `${stamp()}.hex`);
+    const fd = fs.openSync(file, "wx");
+    let count = 0;
+    try {
+      checked(
+        await session(port, "HISTORY", HISTORY_TIMEOUT_MS, (line) => {
+          if (!line.startsWith("DATA hist ")) return;
+          fs.writeSync(fd, line.slice(10) + "\n");
+          count++;
+        }),
+      );
+    } finally {
+      fs.closeSync(fd);
+      if (count === 0) fs.rmSync(file, { force: true });
+    }
+    print(`${count} packets -> ${file}`);
+  });
+}
+
+// Typed for scripts; values the mote doesn't know yet (-1 in the firmware line) are null.
+function statusJson(f) {
+  const num = (v) => (v === undefined || v === "-1" ? null : Number(v));
+  const steps = num(f.steps);
+  return {
+    band: { state: f.band, since_s: num(f.since), addr: f.addr || null, last_data_s: num(f.last_data), battery_pct: num(f.battery) },
+    today: steps === null ? null : { steps, dist_m: num(f.dist), kcal: num(f.kcal) },
+    mote: { fw: f.fw, uptime_s: num(f.uptime), mem_free: num(f.mem_free), idf_free: num(f.idf_free), time_source: f.time_source },
+  };
+}
+
+// --- commands --------------------------------------------------------------------------------
+
+const USAGE = `usage: mote buzz <alert> | buzz pattern <a>,<b>,... | stop | status [--json | --raw] | connected | port
+            | config get <key> | config set <key> <value> | history [<dir>] | reboot
+alerts: ${ALERTS.join(" ")}`;
+
+async function run(argv, print = console.log) {
+  const [cmd, ...rest] = argv;
+  switch (cmd) {
+    case "buzz": {
+      if (rest[0] === "pattern" && rest.length === 2) return void (await ask(`PATTERN ${rest[1]}`));
+      if (rest.length !== 1) throw new CliError(2, USAGE);
+      return void (await ask(`BUZZ ${rest[0]}`));
+    }
+    case "stop":
+      return void (await ask("STOP"));
+    case "status": {
+      const [ok] = await ask("STATUS");
+      if (rest.includes("--raw")) return print(ok.slice(3));
+      if (rest.includes("--json")) return print(JSON.stringify(statusJson(fields(ok)), null, 2));
+      return print(formatStatus(fields(ok)));
+    }
+    case "connected": {
+      const [ok] = await ask("STATUS");
+      if (fields(ok).band !== "connected") throw new CliError(1, "");
+      return;
+    }
+    case "port":
+      return print(
+        await withLock(async () => {
+          const port = await findPort();
+          checked(await request(port, "PING", 2000));
+          return port;
+        }),
+      );
+    case "config": {
+      if (rest[0] === "get" && rest.length === 2) {
+        const [ok] = await ask(`CONFIG GET ${rest[1]}`);
+        return print(ok.slice(3).split("=").slice(1).join("="));
+      }
+      if (rest[0] === "set" && rest.length === 3) {
+        await ask(`CONFIG SET ${rest[1]} ${rest[2]}`);
+        return print("saved; takes effect after: mote reboot");
+      }
+      throw new CliError(2, USAGE);
+    }
+    case "history":
+      if (rest.length > 1) throw new CliError(2, USAGE);
+      return history(rest[0] || HISTORY_DIR, print);
+    case "reboot":
+      return void (await ask("REBOOT"));
+    default:
+      throw new CliError(2, USAGE);
+  }
+}
+
+function logLine(args, outcome, ms) {
+  try {
+    fs.mkdirSync(path.dirname(LOG_FILE), { recursive: true });
+    const d = new Date();
+    const local = new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 19);
+    fs.appendFileSync(LOG_FILE, `${local} mote ${args.join(" ")} -> ${outcome} (${ms} ms)\n`);
+  } catch {}
+}
+
+async function main() {
+  const args = process.argv.slice(2);
+  const t0 = Date.now();
+  try {
+    await run(args);
+    logLine(args, "ok", Date.now() - t0);
+  } catch (e) {
+    const code = e instanceof CliError ? e.exitCode : 4;
+    if (e.message) console.error(code === 2 ? e.message : `mote: ${e.message}`);
+    logLine(args, `exit ${code} ${e.message.split("\n")[0]}`, Date.now() - t0);
+    process.exitCode = code;
+  }
+}
+
+if (require.main === module) main();
+module.exports = { parseIoreg, lineCollector, fields, formatStatus, statusJson, duration, stamp, timeLine, run, CliError };
