@@ -7,9 +7,17 @@
 //   mote status [--json | --raw]   band link, battery, today's totals, mote health (no band requests)
 //   mote connected                 exit 0 if the band is connected, else 1
 //   mote port                      the mote's serial port (checked with PING)
+//   mote config                    every setting and its value
 //   mote config get <key> | set <key> <value>
+//   mote config export | import <file>                 all settings as JSON
 //   mote history [<dir>]           download the band's raw history packets to <dir>/<stamp>.hex
 //   mote watch [<seconds>]         print the mote's events live (Ctrl-C to stop; other commands wait)
+//   mote ancs rules                which iPhone notifications buzz, and how
+//   mote ancs set app|category <name> <alert|ignore>   add or change a rule
+//   mote ancs unset app|category <name>                remove a rule
+//   mote ancs default <alert|ignore>                   for notifications no rule matches
+//   mote ancs seen                 apps and categories seen since the mote started
+//   mote ancs export | import <file>                   all rules as JSON
 //   mote reboot
 //
 // Exit codes: 0 ok, 1 firmware ERR (or not connected), 2 usage, 3 no mote, 4 timeout or port busy.
@@ -31,6 +39,8 @@ const LOCK_WAIT_MS = 2000;
 const LOCK_STALE_MS = 15000;
 const LOCK_TOUCH_MS = 5000; // long requests (history) keep the lock fresh
 const HISTORY_DIR = path.join(os.homedir(), "Library", "Application Support", "notify-me", "history");
+const DATA_DIR = path.join(os.homedir(), "Library", "Application Support", "notify-me");
+const BACKUPS = { ancs: path.join(DATA_DIR, "ancs.json"), config: path.join(DATA_DIR, "config.json") };
 const HISTORY_TIMEOUT_MS = 120000; // firmware gives up after 12 s of quiet or 90 s of waiting
 const SETTLE_MS = 30; // discard stale output buffered before the port was opened
 const PROTOCOL = /^(OK|ERR|DATA|EVT|LOG)( |$)/;
@@ -286,15 +296,157 @@ function statusJson(f) {
   };
 }
 
+// --- ancs rules ------------------------------------------------------------------------------
+
+// DATA rule <default|category|app> ... lines -> aligned text
+function formatRules(lines) {
+  const rows = lines.filter((l) => l.startsWith("DATA rule ")).map((l) => l.slice(10).split(" "));
+  const rule = rows.map((r) => (r[0] === "default" ? ["default", "", r[1]] : r));
+  const w0 = Math.max(...rule.map((r) => r[0].length)) + 2;
+  const w1 = Math.max(...rule.map((r) => r[1].length)) + 2;
+  return rule.map(([kind, name, alert]) => `${kind.padEnd(w0)}${name.padEnd(w1)}${alert}`).join("\n");
+}
+
+function formatSeen(lines) {
+  const rows = lines.filter((l) => l.startsWith("DATA seen ")).map((l) => l.slice(10).split(" "));
+  if (!rows.length) return "nothing seen since the mote started";
+  const w0 = Math.max(...rows.map((r) => r[0].length)) + 2;
+  const w1 = Math.max(...rows.map((r) => r[1].length)) + 2;
+  return rows.map(([kind, name, count]) => `${kind.padEnd(w0)}${name.padEnd(w1)}${count.slice(6)}`).join("\n");
+}
+
+// <ANCS|CONFIG> EXPORT -> the parsed JSON from its DATA line
+async function exported(what) {
+  const [data] = await ask(`${what.toUpperCase()} EXPORT`);
+  return JSON.parse(data.slice(data.indexOf("{")));
+}
+
+// After every change: settings and rules live on the mote, so keep a copy on this Mac (import restores it).
+async function backup(what, print) {
+  try {
+    const json = await exported(what);
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+    fs.writeFileSync(BACKUPS[what], JSON.stringify(json, null, 2) + "\n");
+  } catch (e) {
+    print(`saved on the mote, but the backup failed: ${e.message}`);
+  }
+}
+
+function readJson(file) {
+  try {
+    return JSON.parse(fs.readFileSync(file, "utf8"));
+  } catch (e) {
+    throw new CliError(1, `can't read ${file}: ${e.message}`);
+  }
+}
+
+function formatConfig(values) {
+  const w = Math.max(...Object.keys(values).map((k) => k.length)) + 2;
+  return Object.entries(values).sort(([a], [b]) => a.localeCompare(b)).map(([k, v]) => `${k.padEnd(w)}${v === "" ? "(not set)" : v}`).join("\n");
+}
+
+async function ancs(rest, print) {
+  const [sub, ...args] = rest;
+  const kind = args[0];
+  const change = async (line) => {
+    const [ok] = await ask(line);
+    await backup("ancs", print);
+    return ok;
+  };
+  if (sub === "rules" && args.length === 0) return print(formatRules(await ask("ANCS RULES")));
+  if (sub === "seen" && args.length === 0) return print(formatSeen(await ask("ANCS SEEN")));
+  if (sub === "export" && args.length === 0) return print(JSON.stringify(await exported("ancs"), null, 2));
+  if (sub === "default" && args.length === 1) return void (await change(`ANCS DEFAULT ${args[0]}`));
+  if ((kind === "app" || kind === "category") && sub === "set" && args.length === 3) {
+    return void (await change(`ANCS SET ${kind} ${args[1]} ${args[2]}`));
+  }
+  if ((kind === "app" || kind === "category") && sub === "unset" && args.length === 2) {
+    const ok = await change(`ANCS UNSET ${kind} ${args[1]}`);
+    if (fields(ok).removed === "0") print(`no ${kind} rule for ${args[1]}`);
+    return;
+  }
+  if (sub === "import" && args.length === 1) {
+    const ok = await change(`ANCS IMPORT ${JSON.stringify(readJson(args[0]))}`);
+    return print(`imported ${fields(ok).rules} rules`);
+  }
+  throw new CliError(2, USAGE);
+}
+
 // --- commands --------------------------------------------------------------------------------
 
-const USAGE = `usage: mote buzz <alert> | buzz pattern <a>,<b>,... | stop | status [--json | --raw] | connected | port
-            | config get <key> | config set <key> <value> | history [<dir>] | watch [<seconds>] | reboot
-alerts: ${ALERTS.join(" ")}`;
+const USAGE = `usage: mote <command> [args]   (mote help for details)
+  buzz <alert> | buzz pattern <a>,<b>,... | stop | status [--json|--raw] | connected | port | watch [<s>]
+  history [<dir>] | config [get <key> | set <key> <value> | export | import <file>] | reboot
+  ancs rules | ancs set app|category <name> <alert|ignore> | ancs unset app|category <name>
+  ancs default <alert|ignore> | ancs seen | ancs export | ancs import <file>`;
+
+const HELP = `mote: talk to the notify-me mote (the ESP32 in front of your fitness band) over USB.
+
+BUZZ THE BAND
+  mote buzz <alert>              play an alert on the band
+  mote buzz pattern <a>,<b>,...  several alerts in order, 6 s apart
+  mote stop                      stop the playing alert and drop the waiting one
+
+  alerts: tap tap2 tap3 long burst ring alarm alarm+
+  One alert plays at a time and one more can wait (a newer one replaces it).
+
+CHECK ON IT
+  mote status                    band, battery, today's steps, iPhone link, mote health
+  mote status --json             the same as JSON, for scripts (unknown values are null)
+  mote connected                 exit 0 if the band is connected, else 1 (for scripts and hooks)
+  mote watch [<seconds>]         print the mote's events live: links, notifications, battery (Ctrl-C to stop;
+                                 other mote commands get "port busy" meanwhile)
+  mote port                      which serial port the mote is on
+
+IPHONE NOTIFICATIONS
+  Which notifications buzz, and how. Each rule matches an app or a category and names an alert, or "ignore".
+  An app rule beats a category rule, which beats the default. Changes apply at once.
+
+  mote ancs rules                list the rules
+  mote ancs set app <bundle id> <alert|ignore>
+  mote ancs set category <category> <alert|ignore>
+  mote ancs unset app|category <name>
+  mote ancs default <alert|ignore>         for notifications no rule matches ("ignore" = only rules buzz)
+  mote ancs seen                 apps and categories seen since the mote started (to find bundle ids)
+  mote ancs export               all rules as JSON
+  mote ancs import <file>        replace all rules from a JSON file
+
+  categories: other incoming_call missed_call voicemail social schedule email news health business location
+              entertainment
+
+  e.g.  mote ancs set app com.duolingo.DuolingoMobile ignore
+        mote ancs set category missed_call ignore
+
+SETTINGS (apply after mote reboot)
+  mote config                    every setting and its value
+  mote config get <key>
+  mote config set <key> <value>  band.addr <aa:bb:cc:dd:ee:ff>   the band to connect to
+                                 watchdog on|off                 restart the mote if it hangs
+                                 ancs on|off                     the iPhone link
+  mote config export             all settings as JSON
+  mote config import <file>      replace all settings from a JSON file
+
+DATA AND UPKEEP
+  mote history [<dir>]           download the band's stored history as raw packets, one file per download
+                                 (default ~/Library/Application Support/notify-me/history/)
+  mote reboot                    restart the mote
+
+FILES
+  Settings and rules live on the mote. After every change the CLI saves a copy in
+  ~/Library/Application Support/notify-me/ (config.json, ancs.json); restore with config/ancs import.
+  Every call is logged to ~/Library/Logs/notify-me.log.
+
+Every call also sets the mote's clock from this Mac. NOTIFY_ME_PORT=<port> skips port detection.
+Exit codes: 0 ok, 1 the mote said no (or the band isn't connected), 2 usage, 3 no mote, 4 timeout or port busy.`;
 
 async function run(argv, print = console.log) {
   const [cmd, ...rest] = argv;
   switch (cmd) {
+    case undefined:
+    case "help":
+    case "-h":
+    case "--help":
+      return print(HELP);
     case "buzz": {
       if (rest[0] === "pattern" && rest.length === 2) return void (await ask(`PATTERN ${rest[1]}`));
       if (rest.length !== 1) throw new CliError(2, USAGE);
@@ -322,12 +474,20 @@ async function run(argv, print = console.log) {
         }),
       );
     case "config": {
+      if (rest.length === 0) return print(formatConfig(await exported("config")));
+      if (rest[0] === "export" && rest.length === 1) return print(JSON.stringify(await exported("config"), null, 2));
+      if (rest[0] === "import" && rest.length === 2) {
+        await ask(`CONFIG IMPORT ${JSON.stringify(readJson(rest[1]))}`);
+        await backup("config", print);
+        return print("imported; takes effect after: mote reboot");
+      }
       if (rest[0] === "get" && rest.length === 2) {
         const [ok] = await ask(`CONFIG GET ${rest[1]}`);
         return print(ok.slice(3).split("=").slice(1).join("="));
       }
       if (rest[0] === "set" && rest.length === 3) {
         await ask(`CONFIG SET ${rest[1]} ${rest[2]}`);
+        await backup("config", print);
         return print("saved; takes effect after: mote reboot");
       }
       throw new CliError(2, USAGE);
@@ -338,6 +498,8 @@ async function run(argv, print = console.log) {
     case "history":
       if (rest.length > 1) throw new CliError(2, USAGE);
       return history(rest[0] || HISTORY_DIR, print);
+    case "ancs":
+      return ancs(rest, print);
     case "reboot":
       return void (await ask("REBOOT"));
     default:
@@ -369,4 +531,7 @@ async function main() {
 }
 
 if (require.main === module) main();
-module.exports = { parseIoreg, lineCollector, fields, formatStatus, statusJson, duration, stamp, timeLine, run, CliError };
+module.exports = {
+  parseIoreg, lineCollector, fields, formatStatus, statusJson, duration, stamp, timeLine, formatRules, formatSeen, formatConfig, run,
+  CliError,
+};
