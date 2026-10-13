@@ -18,6 +18,17 @@
 //   mote ancs default <alert|ignore>                   for notifications no rule matches
 //   mote ancs seen                 apps and categories seen since the mote started
 //   mote ancs export | import <file>                   all rules as JSON
+//   mote chime [on | off | set <enabled|alert|half|hours|days> <value>]   the hourly chime
+//   mote alarm [list]              alarms, the next one first
+//   mote alarm add <hh:mm> [days <d>] [alert <a>] [label <text>]
+//   mote alarm set <id> <time|days|alert|label|enabled> <value> | on <id> | off <id> | rm <id>
+//   mote remind [list] [source <s>]                    one-off reminders, soonest first
+//   mote remind add <when> [alert <a>] [source <s>] [label <text>]
+//   mote remind set <id> <when|alert|label|source> <value> | rm <id> | clear [source <s>]
+//   mote remind sync <source> <file>                   replace one source's reminders from JSON
+//   mote quiet [on | off | set <enabled|hours|days> <value>]   quiet hours
+//   mote snooze [<when> | until <when> | off]          silence everything for a while
+//   mote schedule export | import <file>               the mote's schedule as JSON
 //   mote reboot
 //
 // Exit codes: 0 ok, 1 firmware ERR (or not connected), 2 usage, 3 no mote, 4 timeout or port busy.
@@ -40,9 +51,14 @@ const LOCK_STALE_MS = 15000;
 const LOCK_TOUCH_MS = 5000; // long requests (history) keep the lock fresh
 const HISTORY_DIR = path.join(os.homedir(), "Library", "Application Support", "notify-me", "history");
 const DATA_DIR = path.join(os.homedir(), "Library", "Application Support", "notify-me");
-const BACKUPS = { ancs: path.join(DATA_DIR, "ancs.json"), config: path.join(DATA_DIR, "config.json") };
+const BACKUPS = {
+  ancs: path.join(DATA_DIR, "ancs.json"),
+  config: path.join(DATA_DIR, "config.json"),
+  schedule: path.join(DATA_DIR, "schedule.json"),
+};
 const HISTORY_TIMEOUT_MS = 120000; // firmware gives up after 12 s of quiet or 90 s of waiting
 const SETTLE_MS = 30; // discard stale output buffered before the port was opened
+const LIST_TIMEOUT_MS = 5000; // lists and exports read the labels from the mote's flash: ~1 s for a full schedule
 const PROTOCOL = /^(OK|ERR|DATA|EVT|LOG)( |$)/;
 const ALERTS = ["tap", "tap2", "tap3", "long", "burst", "ring", "alarm", "alarm+"];
 
@@ -181,6 +197,42 @@ function request(port, line, timeoutMs, onLine) {
   });
 }
 
+// Several requests on one opening of the port, each sent once the one before has its reply. Stops at the first ERR;
+// returns the replies so far (the last is the ERR, if any).
+function requests(port, lines, timeoutMs) {
+  return new Promise((resolve, reject) => {
+    let io;
+    try {
+      io = openPort(port);
+    } catch (e) {
+      return reject(e);
+    }
+    const { input, output } = io;
+    const replies = [];
+    let i = -1;
+    let timer;
+    let collect;
+    const finish = (err) => {
+      clearTimeout(timer);
+      io.close();
+      err ? reject(err) : resolve(replies);
+    };
+    const next = () => {
+      i += 1;
+      if (i === lines.length) return finish();
+      clearTimeout(timer);
+      timer = setTimeout(() => finish(new CliError(4, `no reply to ${lines[i].split(" ")[0]} (timeout)`)), timeoutMs);
+      collect = lineCollector((got) => {
+        replies.push(got);
+        got[got.length - 1].startsWith("ERR") ? finish() : next();
+      });
+      output.write(lines[i] + "\n");
+    };
+    input.on("data", (chunk) => collect && collect(chunk.toString("latin1")));
+    setTimeout(next, SETTLE_MS);
+  });
+}
+
 function timeLine(d = new Date()) {
   return `TIME ${Math.floor(d.getTime() / 1000)} ${-d.getTimezoneOffset()}`;
 }
@@ -225,8 +277,30 @@ function formatStatus(f) {
   if (f.battery !== "-1") lines.push(`battery  ${f.battery}%`);
   if (f.steps !== "-1") lines.push(`today    ${f.steps} steps, ${f.dist} m, ${f.kcal} kcal`);
   if (f.phone) lines.push(`phone    ${f.phone}${f.phone === "off" ? "" : ` for ${duration(f.phone_since)}`}${PHONE_HINT[f.phone] || ""}`);
+  if (f.alarms !== undefined) {
+    const n = (count, word) => `${count} ${word}${count === "1" ? "" : "s"}`;
+    lines.push(`schedule chime ${f.chime === "1" ? "on" : "off"}, quiet hours ${f.quiet_enabled === "1" ? "on" : "off"}, ` +
+      `${n(f.alarms, "alarm")}, ${n(f.reminders, "reminder")}`);
+  }
+  if (f.quiet === "snooze") lines.push(`quiet    snoozed until ${shortTime(f.quiet_until)}`);
+  if (f.quiet === "hours") lines.push(`quiet    quiet hours until ${f.quiet_until}`);
+  if (f.time && f.time !== "-") lines.push(`time     ${f.time.replace("T", " ")} ${utcOffset(f.utc_offset)} (from ${f.time_source})`);
   lines.push(`mote     fw ${f.fw}, up ${duration(f.uptime)}, heap ${f.mem_free} B free, ble ${f.idf_free} B free`);
   return lines.join("\n");
+}
+
+// "2026-10-13T14:00:00" -> "14:00" today, else "2026-10-14 14:00"
+function shortTime(iso, now = new Date()) {
+  const p = (n) => String(n).padStart(2, "0");
+  const today = `${now.getFullYear()}-${p(now.getMonth() + 1)}-${p(now.getDate())}`;
+  return iso.startsWith(today) ? iso.slice(11, 16) : iso.replace("T", " ").slice(0, 16);
+}
+
+// 660 -> "UTC+11:00", -330 -> "UTC-05:30"
+function utcOffset(minutes) {
+  const m = Number(minutes);
+  const p = (n) => String(n).padStart(2, "0");
+  return `UTC${m < 0 ? "-" : "+"}${p(Math.floor(Math.abs(m) / 60))}:${p(Math.abs(m) % 60)}`;
 }
 
 function stamp(d = new Date()) {
@@ -292,7 +366,15 @@ function statusJson(f) {
     band: { state: f.band, since_s: num(f.since), addr: f.addr || null, last_data_s: num(f.last_data), battery_pct: num(f.battery) },
     today: steps === null ? null : { steps, dist_m: num(f.dist), kcal: num(f.kcal) },
     phone: f.phone ? { state: f.phone, since_s: num(f.phone_since) } : null,
-    mote: { fw: f.fw, uptime_s: num(f.uptime), mem_free: num(f.mem_free), idf_free: num(f.idf_free), time_source: f.time_source },
+    chime: f.chime === undefined ? null : { enabled: f.chime === "1" },
+    quiet: f.quiet_enabled === undefined ? null : { enabled: f.quiet_enabled === "1" },
+    snooze: f.snooze_left === undefined ? null : { remaining_s: num(f.snooze_left) },
+    alarm: f.alarms === undefined ? null : { count: num(f.alarms) },
+    reminder: f.reminders === undefined ? null : { count: num(f.reminders) },
+    mote: {
+      fw: f.fw, uptime_s: num(f.uptime), mem_free: num(f.mem_free), idf_free: num(f.idf_free), time_source: f.time_source,
+      time: f.time === undefined || f.time === "-" ? null : f.time, utc_offset_min: f.utc_offset === "-" ? null : num(f.utc_offset),
+    },
   };
 }
 
@@ -309,16 +391,64 @@ function formatRules(lines) {
 
 function formatSeen(lines) {
   const rows = lines.filter((l) => l.startsWith("DATA seen ")).map((l) => l.slice(10).split(" "));
-  if (!rows.length) return "nothing seen since the mote started";
+  const overflow = Number(fields(lines[lines.length - 1]).overflow || 0);
+  const note = overflow ? `\n(${overflow} more from names that didn't fit: the mote counts ${rows.length} at most)` : "";
+  if (!rows.length) return "nothing seen since the mote started" + note;
   const w0 = Math.max(...rows.map((r) => r[0].length)) + 2;
   const w1 = Math.max(...rows.map((r) => r[1].length)) + 2;
-  return rows.map(([kind, name, count]) => `${kind.padEnd(w0)}${name.padEnd(w1)}${count.slice(6)}`).join("\n");
+  return rows.map(([kind, name, count]) => `${kind.padEnd(w0)}${name.padEnd(w1)}${count.slice(6)}`).join("\n") + note;
 }
 
-// <ANCS|CONFIG> EXPORT -> the parsed JSON from its DATA line
+// The schedule and the ANCS rules travel a line per item (an alarm, a reminder, a rule), so the mote never needs a big
+// block of memory for them; files on this Mac stay one JSON document. toLines and fromLines convert.
+function toLines(what, doc) {
+  if (!doc || typeof doc !== "object" || Array.isArray(doc)) throw new CliError(1, "expected a JSON object");
+  const out = [];
+  for (const [key, value] of Object.entries(doc)) {
+    if (what === "schedule" && (key === "alarms" || key === "reminders")) {
+      if (!Array.isArray(value)) throw new CliError(1, `${key} must be a list`);
+      for (const item of value) out.push({ [key.slice(0, -1)]: item });
+    } else if (what === "ancs" && (key === "app" || key === "category") && value && typeof value === "object" && !Array.isArray(value)) {
+      for (const [name, alert] of Object.entries(value)) out.push({ [key]: { [name]: alert } });
+    } else out.push({ [key]: value });
+  }
+  return out;
+}
+
+function fromLines(what, values) {
+  const out = what === "schedule" ? { chime: {}, alarms: [], reminders: [], quiet: {}, snooze_until: 0 } : { default: "tap", category: {}, app: {} };
+  const labels = [];
+  for (const value of values) {
+    const [[key, v]] = Object.entries(value);
+    if (what === "schedule" && (key === "alarm" || key === "reminder")) out[`${key}s`].push({ label: "", ...v });
+    else if (what === "schedule" && key === "label") labels.push(v); // the mote sends labels after the items
+    else if (what === "ancs" && (key === "app" || key === "category")) Object.assign(out[key], v);
+    else out[key] = v;
+  }
+  for (const { kind, id, label } of labels) {
+    const item = out[`${kind}s`].find((x) => x.id === id);
+    if (item) item.label = label;
+  }
+  return out;
+}
+
+// <ANCS|CONFIG|SCHEDULE> EXPORT -> one JSON document (config comes as one DATA line, the others a line per item)
 async function exported(what) {
-  const [data] = await ask(`${what.toUpperCase()} EXPORT`);
-  return JSON.parse(data.slice(data.indexOf("{")));
+  const lines = await ask(`${what.toUpperCase()} EXPORT`, LIST_TIMEOUT_MS);
+  if (what === "config") return JSON.parse(lines[0].slice(lines[0].indexOf("{")));
+  const prefix = `DATA ${what} `;
+  return fromLines(what, lines.filter((l) => l.startsWith(prefix)).map((l) => JSON.parse(l.slice(prefix.length))));
+}
+
+// An import a line at a time: the request that starts it, LINE <json> per value, END. Returns the reply to END.
+async function sendLines(begin, values) {
+  const lines = [begin, ...values.map((v) => `LINE ${JSON.stringify(v)}`), "END"];
+  const replies = await withLock(async () => {
+    const port = await findPort();
+    await request(port, timeLine(), 3000);
+    return requests(port, lines, 3000);
+  });
+  return checked(replies[replies.length - 1]);
 }
 
 // After every change: settings and rules live on the mote, so keep a copy on this Mac (import restores it).
@@ -366,8 +496,238 @@ async function ancs(rest, print) {
     return;
   }
   if (sub === "import" && args.length === 1) {
-    const ok = await change(`ANCS IMPORT ${JSON.stringify(readJson(args[0]))}`);
+    const [ok] = await sendLines("ANCS IMPORT", toLines("ancs", readJson(args[0])));
+    await backup("ancs", print);
     return print(`imported ${fields(ok).rules} rules`);
+  }
+  throw new CliError(2, USAGE);
+}
+
+// --- schedule ---------------------------------------------------------------------------------
+
+function formatChime(f) {
+  const next = f.next === "-" ? "-" : f.next.replace("T", " ").slice(0, 16);
+  return [`enabled  ${f.enabled === "1" ? "on" : "off"}`, `alert    ${f.alert}`, `half     ${f.half || "off"}`,
+    `hours    ${f.hours}`, `days     ${f.days}`, `next     ${next}`].join("\n");
+}
+
+async function chime(rest, print) {
+  const change = async (line) => {
+    await ask(line);
+    await backup("schedule", print);
+  };
+  if (rest.length === 0) return print(formatChime(fields((await ask("CHIME"))[0])));
+  if ((rest[0] === "on" || rest[0] === "off") && rest.length === 1) return change(`CHIME ${rest[0]}`);
+  if (rest[0] === "set" && rest.length === 3 && ["enabled", "alert", "half", "hours", "days"].includes(rest[1])) {
+    return change(`CHIME SET ${rest[1]} ${rest[2]}`);
+  }
+  throw new CliError(2, USAGE);
+}
+
+// DATA alarm id=1 time=07:30 ... next=<iso|-> label=<text, may have spaces>
+// Labels stay on the mote's flash and follow the items as "DATA label <kind> <id> <text>" lines; this puts them back.
+function labelsOf(lines, kind) {
+  const prefix = `DATA label ${kind} `;
+  const out = new Map();
+  for (const l of lines.filter((x) => x.startsWith(prefix))) {
+    const rest = l.slice(prefix.length);
+    const space = rest.indexOf(" ");
+    out.set(space < 0 ? rest : rest.slice(0, space), space < 0 ? "" : rest.slice(space + 1));
+  }
+  return out;
+}
+
+function parseAlarm(line) {
+  const [head, label] = line.slice("DATA alarm ".length).split(/ label=/); // label= from firmware before 0.15
+  return { ...fields(head), label: label || "" };
+}
+
+function formatAlarms(lines) {
+  const labels = labelsOf(lines, "alarm");
+  const alarms = lines.filter((l) => l.startsWith("DATA alarm ")).map(parseAlarm).map((a) => ({ ...a, label: labels.get(a.id) ?? a.label }));
+  if (!alarms.length) return "no alarms (mote alarm add <hh:mm> [days <d>] [alert <a>] [label <text>])";
+  alarms.sort((a, b) => (a.next === "-") - (b.next === "-") || a.next.localeCompare(b.next) || a.id - b.id);
+  const rows = [["id", "time", "days", "alert", "on", "next", "label"]].concat(alarms.map((a) => [
+    a.id, a.time, a.days, a.alert, a.enabled === "1" ? "on" : "off", a.next === "-" ? "-" : a.next.replace("T", " ").slice(0, 16), a.label]));
+  const widths = rows[0].map((_, i) => Math.max(...rows.map((r) => String(r[i]).length)) + 2);
+  return rows.map((r) => r.map((c, i) => (i === r.length - 1 ? c : String(c).padEnd(widths[i]))).join("").trimEnd()).join("\n");
+}
+
+async function alarm(rest, print) {
+  const [sub, ...args] = rest;
+  const change = async (line) => {
+    const [ok] = await ask(line);
+    await backup("schedule", print);
+    return ok;
+  };
+  const id = (s) => {
+    if (!/^\d+$/.test(s || "")) throw new CliError(2, USAGE);
+    return s;
+  };
+  if (sub === undefined || (sub === "list" && args.length === 0)) return print(formatAlarms(await ask("ALARM LIST", LIST_TIMEOUT_MS)));
+  if (sub === "add" && args.length >= 1) return print(`added alarm ${fields(await change(`ALARM ADD ${args.join(" ")}`)).id}`);
+  if (sub === "set" && args.length >= 3) return void (await change(`ALARM SET ${id(args[0])} ${args.slice(1).join(" ")}`));
+  if ((sub === "on" || sub === "off" || sub === "rm") && args.length === 1) {
+    return void (await change(`ALARM ${sub.toUpperCase()} ${id(args[0])}`));
+  }
+  throw new CliError(2, USAGE);
+}
+
+// --- reminders --------------------------------------------------------------------------------
+
+// <when> -> unix seconds (UTC): "14:30" (the next one), "2026-10-20T09:00" or "2026-10-20 09:00" (local), "25m",
+// "1h30m", "90s" (from now). Reminders are instants, so the Mac's time zone is applied here, once.
+function parseWhen(text, now = new Date()) {
+  let m;
+  if ((m = /^(\d{1,2}):(\d{2})$/.exec(text))) {
+    const d = new Date(now);
+    d.setHours(Number(m[1]), Number(m[2]), 0, 0);
+    if (Number(m[1]) > 23 || Number(m[2]) > 59) return null;
+    if (d <= now) d.setDate(d.getDate() + 1);
+    return Math.floor(d.getTime() / 1000);
+  }
+  if ((m = /^(\d{4})-(\d{2})-(\d{2})[T ](\d{1,2}):(\d{2})(?::(\d{2}))?$/.exec(text))) {
+    const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]), Number(m[4]), Number(m[5]), Number(m[6] || 0));
+    return Number.isNaN(d.getTime()) || d.getMonth() !== Number(m[2]) - 1 ? null : Math.floor(d.getTime() / 1000);
+  }
+  if ((m = /^(?:(\d+)h)?(?:(\d+)m)?(?:(\d+)s)?$/.exec(text)) && text) {
+    const s = Number(m[1] || 0) * 3600 + Number(m[2] || 0) * 60 + Number(m[3] || 0);
+    return s > 0 ? Math.floor(now.getTime() / 1000) + s : null;
+  }
+  return null;
+}
+
+// "2026-10-20 09:00" arrives as two arguments: join a date with the time after it.
+function whenArgs(args) {
+  if (/^\d{4}-\d{2}-\d{2}$/.test(args[0] || "") && /^\d{1,2}:\d{2}(:\d{2})?$/.test(args[1] || "")) {
+    return [`${args[0]} ${args[1]}`, ...args.slice(2)];
+  }
+  return args;
+}
+
+function when(text) {
+  const unix = parseWhen(text);
+  if (unix === null) throw new CliError(2, `can't read "${text}" as a time: use 14:30, 2026-10-20 09:00, 25m, 1h30m or 90s`);
+  return unix;
+}
+
+// Time left: 25m, 2h59m, then whole days and hours (6d17h).
+function until(s) {
+  return s < 86400 ? duration(s) : `${Math.floor(s / 86400)}d${Math.floor((s % 86400) / 3600)}h`;
+}
+
+// DATA remind id=1 at=<unix> local=<iso> alert=long source=<s|-> label=<text, may have spaces>
+function formatReminders(lines, now = new Date()) {
+  const labels = labelsOf(lines, "reminder");
+  const items = lines.filter((l) => l.startsWith("DATA remind ")).map((l) => {
+    const [head, label] = l.slice("DATA remind ".length).split(/ label=/);
+    const r = fields(head);
+    return { ...r, label: labels.get(r.id) ?? label ?? "" };
+  });
+  if (!items.length) return "no reminders (mote remind add <when> [alert <a>] [label <text>])";
+  items.sort((a, b) => Number(a.at) - Number(b.at) || Number(a.id) - Number(b.id)); // soonest first
+  const p = (n) => String(n).padStart(2, "0");
+  const local = (unix) => {
+    const d = new Date(unix * 1000);
+    const secs = d.getSeconds() ? `:${p(d.getSeconds())}` : ""; // timers set in seconds keep them
+    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}${secs}`;
+  };
+  const rows = [["id", "when", "in", "alert", "source", "label"]].concat(items.map((r) => [
+    r.id, local(Number(r.at)), until(Math.max(0, Number(r.at) - Math.floor(now.getTime() / 1000))), r.alert, r.source, r.label]));
+  const widths = rows[0].map((_, i) => Math.max(...rows.map((r) => String(r[i]).length)) + 2);
+  return rows.map((r) => r.map((c, i) => (i === r.length - 1 ? c : String(c).padEnd(widths[i]))).join("").trimEnd()).join("\n");
+}
+
+// A sync file: [{"at": <unix seconds | "2026-10-20T09:00" (local) | ISO with a zone>, "alert"?, "label"?}, ...]
+function syncItems(file) {
+  const items = readJson(file);
+  if (!Array.isArray(items)) throw new CliError(1, `${file}: expected a JSON array of {at, alert, label}`);
+  return items.map((item, i) => {
+    let at = item && item.at;
+    if (typeof at === "string") {
+      const unix = /[zZ]|[+-]\d{2}:?\d{2}$/.test(at) ? Math.floor(Date.parse(at) / 1000) : parseWhen(at.replace(" ", "T"));
+      if (!Number.isFinite(unix)) throw new CliError(1, `${file}: item ${i + 1}: can't read "${at}" as a time`);
+      at = unix;
+    }
+    return { ...item, at };
+  });
+}
+
+async function remind(rest, print) {
+  const [sub, ...rawArgs] = rest;
+  const args = whenArgs(rawArgs);
+  const change = async (line) => {
+    const [ok] = await ask(line);
+    await backup("schedule", print);
+    return ok;
+  };
+  const id = (s) => {
+    if (!/^\d+$/.test(s || "")) throw new CliError(2, USAGE);
+    return s;
+  };
+  const sourceOnly = (a) => {
+    if (a.length === 0) return "";
+    if (a.length === 2 && a[0] === "source") return ` source ${a[1]}`;
+    throw new CliError(2, USAGE);
+  };
+  if (sub === undefined || sub === "list") return print(formatReminders(await ask(`REMIND LIST${sourceOnly(rawArgs)}`, LIST_TIMEOUT_MS)));
+  if (sub === "add" && args.length >= 1) {
+    const ok = await change(`REMIND ADD ${when(args[0])}${args.length > 1 ? " " + args.slice(1).join(" ") : ""}`);
+    return print(`added reminder ${fields(ok).id}`);
+  }
+  if (sub === "set" && rawArgs.length >= 3) {
+    const [rid, key, ...value] = rawArgs;
+    const v = key === "when" ? String(when(whenArgs(value)[0])) : value.join(" ");
+    return void (await change(`REMIND SET ${id(rid)} ${key === "when" ? "at" : key} ${v}`));
+  }
+  if (sub === "rm" && rawArgs.length === 1) return void (await change(`REMIND RM ${id(rawArgs[0])}`));
+  if (sub === "clear") return print(`removed ${fields(await change(`REMIND CLEAR${sourceOnly(rawArgs)}`)).removed}`);
+  if (sub === "sync" && rawArgs.length === 2) {
+    const [ok] = await sendLines(`REMIND SYNC ${rawArgs[0]}`, syncItems(rawArgs[1]));
+    await backup("schedule", print);
+    return print(`${fields(ok).source}: ${fields(ok).reminders} reminders`);
+  }
+  throw new CliError(2, USAGE);
+}
+
+// --- quiet hours and snooze -------------------------------------------------------------------
+
+function formatQuiet(f) {
+  return [`enabled  ${f.enabled === "1" ? "on" : "off"}`, `hours    ${f.hours}`, `days     ${f.days}`,
+    `now      ${f.active === "1" ? "quiet" : "not quiet"}`].join("\n");
+}
+
+async function quiet(rest, print) {
+  const change = async (line) => {
+    await ask(line);
+    await backup("schedule", print);
+  };
+  if (rest.length === 0) return print(formatQuiet(fields((await ask("QUIET"))[0])));
+  if ((rest[0] === "on" || rest[0] === "off") && rest.length === 1) return change(`QUIET ${rest[0]}`);
+  if (rest[0] === "set" && rest.length === 3 && ["enabled", "hours", "days"].includes(rest[1])) {
+    return change(`QUIET SET ${rest[1]} ${rest[2]}`);
+  }
+  throw new CliError(2, USAGE);
+}
+
+async function snooze(rest, print) {
+  const show = (ok) => {
+    const f = fields(ok);
+    return print(f.until === "-" ? "not snoozed" : `snoozed until ${shortTime(f.until)} (${duration(f.left)} left)`);
+  };
+  if (rest.length === 0) return show((await ask("SNOOZE"))[0]);
+  if (rest.length === 1 && rest[0] === "off") return show((await ask("SNOOZE OFF"))[0]);
+  const args = whenArgs(rest[0] === "until" ? rest.slice(1) : rest);
+  if (args.length !== 1) throw new CliError(2, USAGE);
+  return show((await ask(`SNOOZE ${when(args[0])}`))[0]);
+}
+
+async function schedule(rest, print) {
+  if (rest[0] === "export" && rest.length === 1) return print(JSON.stringify(await exported("schedule"), null, 2));
+  if (rest[0] === "import" && rest.length === 2) {
+    await sendLines("SCHEDULE IMPORT", toLines("schedule", readJson(rest[1])));
+    await backup("schedule", print);
+    return print("imported");
   }
   throw new CliError(2, USAGE);
 }
@@ -378,7 +738,14 @@ const USAGE = `usage: mote <command> [args]   (mote help for details)
   buzz <alert> | buzz pattern <a>,<b>,... | stop | status [--json|--raw] | connected | port | watch [<s>]
   history [<dir>] | config [get <key> | set <key> <value> | export | import <file>] | reboot
   ancs rules | ancs set app|category <name> <alert|ignore> | ancs unset app|category <name>
-  ancs default <alert|ignore> | ancs seen | ancs export | ancs import <file>`;
+  ancs default <alert|ignore> | ancs seen | ancs export | ancs import <file>
+  chime | chime on|off | chime set <enabled|alert|half|hours|days> <value> | schedule export | schedule import <file>
+  alarm [list] | alarm add <hh:mm> [days <d>] [alert <a>] [label <text>] | alarm set <id> <key> <value>
+  alarm on|off|rm <id>
+  remind [list] [source <s>] | remind add <when> [alert <a>] [source <s>] [label <text>]
+  remind set <id> <when|alert|label|source> <value> | remind rm <id> | remind clear [source <s>]
+  remind sync <source> <file> | quiet | quiet on|off | quiet set <enabled|hours|days> <value>
+  snooze | snooze <when> | snooze until <when> | snooze off`;
 
 const HELP = `mote: talk to the notify-me mote (the ESP32 in front of your fitness band) over USB.
 
@@ -391,7 +758,7 @@ BUZZ THE BAND
   One alert plays at a time and one more can wait (a newer one replaces it).
 
 CHECK ON IT
-  mote status                    band, battery, today's steps, iPhone link, mote health
+  mote status                    band, battery, today's steps, iPhone link, the mote's time, mote health
   mote status --json             the same as JSON, for scripts (unknown values are null)
   mote connected                 exit 0 if the band is connected, else 1 (for scripts and hooks)
   mote watch [<seconds>]         print the mote's events live: links, notifications, battery (Ctrl-C to stop;
@@ -417,6 +784,71 @@ IPHONE NOTIFICATIONS
   e.g.  mote ancs set app com.duolingo.DuolingoMobile ignore
         mote ancs set category missed_call ignore
 
+HOURLY CHIME
+  An alert at the top of each hour inside the active hours and days, played by the mote itself (so it keeps
+  going while the Mac sleeps). It needs the time: after the mote restarts, any mote command sets it.
+
+  mote chime                     settings and the next chime
+  mote chime set enabled on|off  default off (mote chime on|off for short)
+  mote chime set alert <alert>   default tap2
+  mote chime set half <alert|off>   also at each half hour between the first and last chime (hours 09-17:
+                                 09:30 through 16:30); default off
+  mote chime set hours <hh-hh>   e.g. 09-17: chimes at 09:00 through 17:00 (default)
+  mote chime set days <days>     e.g. mon-fri (default), mon,wed,fri, sat-sun, every
+
+ALARMS
+  Played by the mote at a time of day, like the chime (it needs the time; a missed one is never played late).
+  The band's button can't stop an alert: alarm+ is the strongest, and mote stop cuts one short.
+
+  mote alarm                     list alarms, the next one first
+  mote alarm add <hh:mm> [days <days>] [alert <alert>] [label <text>]
+                                 days: every (default), mon-fri, mon,wed,fri, ... or once (rings at the next
+                                 <hh:mm>, then switches itself off); alert: default alarm; label: up to 32
+                                 characters, may have spaces (keep it last)
+  mote alarm set <id> <time|days|alert|label|enabled> <value>
+  mote alarm on | off <id>
+  mote alarm rm <id>
+
+  e.g.  mote alarm add 07:30 days mon-fri alert alarm+ label stand-up
+
+REMINDERS
+  One-off buzzes at a moment in time, from you or any script (e.g. a calendar export). Unlike alarms they are fixed
+  instants (UTC): changing time zone doesn't move them. Each one is deleted once played or missed. Anything due at
+  the same time (reminders, alarms, the chime) plays as one buzz, with the strongest alert among them.
+
+  mote remind                    list reminders, soonest first (mote remind list source <s>: one source's)
+  mote remind add <when> [alert <alert>] [source <source>] [label <text>]
+                                 when: 14:30 (the next one), 2026-10-20 09:00, or from now: 25m, 1h30m, 90s
+                                 (a timer: rings within a second); alert: default long; label last (may have spaces)
+  mote remind set <id> <when|alert|label|source> <value>
+  mote remind rm <id>
+  mote remind clear [source <source>]      all reminders, or one source's
+  mote remind sync <source> <file>         replace all of one source's reminders at once (for scripts):
+                                 [{"at": "2026-10-20T09:00", "label": "standup"}, ...]; at may also be unix
+                                 seconds or ISO with a zone; past ones are dropped
+
+  e.g.  mote remind add 25m label tea
+        mote remind add 90s alert tap3                 # a timer
+        mote remind add 2026-10-20 09:55 alert tap3 source work-cal label standup
+
+QUIET HOURS AND SNOOZE
+  Silenced buzzes are dropped, not saved for later.
+
+  quiet hours (default off, 22:00-07:00, every day) silence the chime, iPhone notifications and mote buzz (hooks);
+  calls, alarms and reminders still come through.
+  mote quiet                     settings and whether it's quiet now
+  mote quiet on | off            (mote quiet set enabled on|off)
+  mote quiet set hours <hh:mm-hh:mm>       may cross midnight: 22:00-07:00 belongs to the day it starts
+  mote quiet set days <days>     e.g. every, mon-fri, fri,sat
+
+  a snooze silences everything, calls, alarms and reminders included (they are used up, not delayed):
+  mote snooze <when>             until then: 45m, 2h, 14:00 (also: mote snooze until 14:00)
+  mote snooze off
+  mote snooze                    how long is left
+
+  mote schedule export           the whole schedule (chime, alarms, reminders, quiet hours, snooze) as JSON
+  mote schedule import <file>    replace it from a JSON file
+
 SETTINGS (apply after mote reboot)
   mote config                    every setting and its value
   mote config get <key>
@@ -433,7 +865,8 @@ DATA AND UPKEEP
 
 FILES
   Settings and rules live on the mote. After every change the CLI saves a copy in
-  ~/Library/Application Support/notify-me/ (config.json, ancs.json); restore with config/ancs import.
+  ~/Library/Application Support/notify-me/ (config.json, ancs.json, schedule.json); restore with
+  config/ancs/schedule import.
   Every call is logged to ~/Library/Logs/notify-me.log.
 
 Every call also sets the mote's clock from this Mac. NOTIFY_ME_PORT=<port> skips port detection.
@@ -500,6 +933,18 @@ async function run(argv, print = console.log) {
       return history(rest[0] || HISTORY_DIR, print);
     case "ancs":
       return ancs(rest, print);
+    case "chime":
+      return chime(rest, print);
+    case "schedule":
+      return schedule(rest, print);
+    case "alarm":
+      return alarm(rest, print);
+    case "remind":
+      return remind(rest, print);
+    case "quiet":
+      return quiet(rest, print);
+    case "snooze":
+      return snooze(rest, print);
     case "reboot":
       return void (await ask("REBOOT"));
     default:
@@ -532,6 +977,6 @@ async function main() {
 
 if (require.main === module) main();
 module.exports = {
-  parseIoreg, lineCollector, fields, formatStatus, statusJson, duration, stamp, timeLine, formatRules, formatSeen, formatConfig, run,
+  parseIoreg, lineCollector, fields, formatStatus, statusJson, duration, stamp, timeLine, formatRules, formatSeen, formatConfig, formatChime, formatAlarms, formatReminders, formatQuiet, shortTime, parseWhen, whenArgs, toLines, fromLines, run,
   CliError,
 };
