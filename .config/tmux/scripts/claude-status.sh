@@ -5,7 +5,7 @@
 #   claude-status.sh waiting        needs you (permission prompt, question)   󰚩
 #   claude-status.sh done           finished its turn                         ✓
 #   claude-status.sh resume         clear 󰚩 once work continues (e.g. after approving)
-#   claude-status.sh clear          remove the marker (you replied / session ended)
+#   claude-status.sh clear          remove the marker (you replied, declined, or the session ended)
 #
 # Two outputs:
 #   - SketchyBar (any terminal): one file per waiting session in $STATE_DIR;
@@ -45,11 +45,30 @@ terminal_app() {
 case "${1:-}" in
   waiting)
     mkdir -p "$STATE_DIR"
+    old_watcher="$(sed -n 's/^watcher=//p' "$state_file" 2>/dev/null)"
+    [[ -n "$old_watcher" ]] && kill "$old_watcher" 2>/dev/null
     {
       printf 'pane=%s\n' "${TMUX_PANE:-}"
       printf 'app=%s\n' "$([[ -z "${TMUX_PANE:-}" ]] && terminal_app)"
       printf 'cwd=%s\n' "$("$JQ_BIN" -r '.cwd // empty' <<<"$input" 2>/dev/null)"
     } > "$state_file"
+    # Declining a question or permission prompt (Esc) interrupts the turn, and
+    # no hook fires for that, so watch the transcript for the interrupt line
+    # until the marker is cleared some other way.
+    transcript="$("$JQ_BIN" -r '.transcript_path // empty' <<<"$input" 2>/dev/null)"
+    if [[ -f "$transcript" ]]; then
+      (
+        offset="$(stat -f %z "$transcript")"
+        while [[ -e "$state_file" ]]; do
+          sleep 1
+          if tail -c +"$((offset + 1))" "$transcript" | grep -q 'Request interrupted by user'; then
+            "$0" clear <<<"$input"
+            break
+          fi
+        done
+      ) </dev/null >/dev/null 2>&1 &
+      printf 'watcher=%s\n' "$!" >> "$state_file"
+    fi
     "$SKETCHYBAR_BIN" --trigger claude_status >/dev/null 2>&1 ;;
   done|resume|clear)
     if [[ -e "$state_file" ]]; then
