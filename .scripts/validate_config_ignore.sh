@@ -39,6 +39,8 @@ should_track=(
   "$HOME/.zshrc"
   "$HOME/.gitmux.conf"
   "$HOME/.config/git/ignore"
+  "$HOME/.config/glow/glow.yml"
+  "$HOME/.config/glow/catppuccin-mocha.json"
   "$HOME/.config/sesh/sesh.toml"
   "$HOME/.config/tmux/tmux.conf"
   "$HOME/.config/tmux/scripts/new-helper.sh"

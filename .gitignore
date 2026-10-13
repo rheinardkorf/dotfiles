@@ -80,6 +80,8 @@
 !.config/README.md
 !.config/gh/
 !.config/gh/**
+!.config/glow/
+!.config/glow/**
 !.config/git/
 !.config/git/**
 !.config/karabiner/
