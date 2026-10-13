@@ -89,6 +89,10 @@
 !.config/nushell/**
 # ...but never shell history (it can contain anything typed, including secrets)
 .config/nushell/history.*
+!.config/panel/
+!.config/panel/**
+# ...but not the local config (work queries and field names)
+.config/panel/config.json
 !.config/sesh/
 !.config/sesh/**
 !.config/sketchybar/

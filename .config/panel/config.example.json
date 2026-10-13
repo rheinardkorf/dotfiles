@@ -1,0 +1,31 @@
+{
+  // An item counts as seen after the cursor rests on it this long
+  "seen_after": "2s",
+
+  // A pane: a source, a query for it, and how often to fetch
+  "panes": {
+    "my-tickets": {
+      "title": "My tickets",
+      "source": "jira",
+      "query": "assignee = currentUser() AND statusCategory != Done ORDER BY updated DESC",
+      "every": "2m"
+    }
+  },
+
+  // A layout is a tmux session: one window per context, one pane per entry
+  "layouts": {
+    "work": {
+      "me": ["my-tickets"]
+    }
+  },
+
+  // Settings handed to each source script
+  "sources": {
+    "jira": {
+      // request fields to show first (acli can't list field names)
+      "labels": {},
+      // fields to leave out of "Other fields"
+      "hide": []
+    }
+  }
+}

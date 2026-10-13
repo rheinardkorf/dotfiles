@@ -1,0 +1,167 @@
+#!/usr/bin/env zsh
+# panel source: Jira, through Atlassian's acli (log in once: acli jira auth login).
+#
+#   jira fetch <jql>     list the tickets, and refresh the cached details
+#                        (fields + comments) of new or changed ones
+#   jira preview <key>   the ticket, its request fields and comments, from the cache
+#
+# Config (.sources.jira in panel's config.json), all optional:
+#   site    Atlassian site for links (default: the one acli is logged in to)
+#   labels  {"customfield_10325": "Justification", ...}: request fields to show
+#           first, in this order. acli can't list field names, so name them here.
+#   hide    ["customfield_11154", ...]: fields to leave out of "Other fields"
+#   other   false: don't list unlabelled fields at all
+emulate -L zsh
+setopt extendedglob pipefail
+zmodload zsh/datetime
+path=(/opt/homebrew/bin $path)
+
+cache="${PANEL_SOURCE_CACHE:?run me through panel}"
+items="$cache/items"
+conf="$PANEL_SOURCE_CONFIG"
+[[ -n $conf ]] || conf='{}'
+
+fetch() {
+  local jql=$1 base list site details mins
+  local -a keys changed need files
+  mkdir -p $items
+  # Same search, only what changed since the last good fetch. Comes before the
+  # list, so nothing that changes in between is missed.
+  base=${jql%%(#i)[[:space:]]##order[[:space:]]##by[[:space:]]*}
+  if [[ -n $PANEL_SINCE ]]; then
+    mins=$(( (EPOCHSECONDS - PANEL_SINCE) / 60 + 2 ))
+    changed=( ${(f)"$(acli jira workitem search --jql "($base) AND updated >= -${mins}m" \
+      --fields key --paginate --json | jq -r '.[].key')"} ) || return 1
+  fi
+  list="$(acli jira workitem search --jql "$jql" --fields 'key,summary,status,priority,issuetype' \
+    --paginate --json)" || { print -u2 -r -- "$list"; return 1 }
+  keys=( ${(f)"$(jq -r '.[].key' <<<"$list")"} ) || return 1
+
+  # Details: new tickets, changed ones, and all of them on a pane's first fetch.
+  for k in $keys; do
+    if [[ -z $PANEL_SINCE || ! -f $items/$k.json ]] || (( ${changed[(Ie)$k]} )); then
+      need+=$k
+    else
+      touch $items/$k.json   # still listed: keep it from being pruned
+    fi
+  done
+  if (( $#need )); then
+    print -rl -- $need | xargs -P 4 -n 1 zsh -c '
+      tmp="$(mktemp "$1/.$2.XXXX")"
+      if acli jira workitem view "$2" --fields "*all" --json > "$tmp" 2>/dev/null &&
+         jq -e .key "$tmp" >/dev/null 2>&1; then mv "$tmp" "$1/$2.json"
+      else rm -f "$tmp"; print -u2 "no details for $2"; fi' _ $items
+  fi
+  find $items -name '*.json' -mtime +14 -delete 2>/dev/null
+
+  site="$(jq -r '.site // empty' <<<"$conf")"
+  if [[ -z $site ]]; then
+    [[ -s $cache/site ]] || acli jira auth status 2>/dev/null | sed -n 's/^ *Site: *//p' > $cache/site
+    site="$(<$cache/site)"
+  fi
+  files=( $items/${^keys}.json(N) )
+  if (( $#files )); then
+    details="$(jq -sc 'map({key: .key, value: .fields.updated}) | from_entries' $files)"
+  else
+    details='{}'
+  fi
+  jq --argjson d "$details" --arg site "$site" '
+    def epoch: if . == null then null else (.[0:19] + "Z" | fromdateiso8601)
+      - ((if .[-5:-4] == "-" then -1 else 1 end) * ((.[-4:-2] | tonumber) * 3600 + (.[-2:] | tonumber) * 60)) end;
+    map({id: .key, title: .fields.summary, status: .fields.status.name,
+         updated: ($d[.key] | epoch),
+         url: (if $site != "" then "https://\($site)/browse/\(.key)" else null end)})' <<<"$list"
+}
+
+preview() {
+  local f="$items/$1.json"
+  if [[ ! -f $f ]]; then
+    print "No details cached for $1 yet: they arrive with the next fetch."
+    return
+  fi
+  jq -r --argjson conf "$conf" '
+    def rgb($c): "\u001b[38;2;\($c)m";
+    def off: "\u001b[0m";  def bold: "\u001b[1m";  def dim: "\u001b[2m";
+    def heading($t): "\n" + rgb("203;166;247") + bold + "── " + $t + off;
+    def rtrim: sub("\\s+$"; "");
+    def epoch: (.[0:19] + "Z" | fromdateiso8601)
+      - ((if .[-5:-4] == "-" then -1 else 1 end) * ((.[-4:-2] | tonumber) * 3600 + (.[-2:] | tonumber) * 60));
+    def when: if . == null then "?" else epoch | strflocaltime("%a %-d %b %H:%M") end;
+
+    # Atlassian Document Format (rich text) -> plain text
+    def adf($ind):
+      def item($bullet): (.content // []) | adf($ind + "  ") | sub("^" + $ind + "  "; $ind + $bullet);
+      if type == "array" then map(adf($ind)) | join("")
+      elif type != "object" then (. // "" | tostring)
+      elif .type == "text" then (.text // "") as $t
+        | ([.marks[]? | select(.type == "link") | .attrs.href][0]) as $href
+        | if $href and $href != $t then "\($t) (\($href))" else $t end
+      elif .type == "hardBreak" then "\n" + $ind
+      elif .type == "mention" then (.attrs.text // "@someone")
+      elif .type == "emoji" then (.attrs.text // .attrs.shortName // "")
+      elif .type == "inlineCard" or .type == "blockCard" or .type == "embedCard" then (.attrs.url // "")
+      elif .type == "status" then "[\(.attrs.text // "")]"
+      elif .type == "date" then (.attrs.timestamp | tonumber / 1000 | strftime("%Y-%m-%d"))
+      elif .type == "paragraph" or .type == "heading" then $ind + ((.content // []) | adf($ind)) + "\n"
+      elif .type == "bulletList" then (.content // []) | map(item("• ")) | join("")
+      elif .type == "orderedList" then (.content // []) | to_entries | map(.key as $i | .value | item("\($i + 1). ")) | join("")
+      elif .type == "codeBlock" then ((.content // []) | adf("") | split("\n") | map($ind + "    " + .) | join("\n")) + "\n"
+      elif .type == "blockquote" then (.content // []) | adf($ind + "│ ")
+      elif .type == "rule" then $ind + "────────\n"
+      elif (.type | test("^media")) then $ind + "[attachment]\n"
+      elif .type == "table" then (.content // []) | map($ind + ((.content // []) | map((.content // []) | adf("") | rtrim | gsub("\n"; " ")) | join(" │ ")) + "\n") | join("")
+      else (.content // []) | adf($ind) end;
+
+    # A field value as text (options, users, rich text, plain values)
+    def fval:
+      if . == null then ""
+      elif type == "string" then .
+      elif type == "number" or type == "boolean" then tostring
+      elif type == "array" then map(fval) | map(select(. != "")) | join(", ")
+      elif type == "object" then
+        if .type == "doc" then adf("") | rtrim
+        elif has("value") then (.value | tostring) + (if .child.value then " → " + .child.value else "" end)
+        elif has("displayName") then .displayName
+        elif has("name") then .name
+        else "" end
+      else "" end;
+    # Worth listing under "Other fields": text, options and rich text (not SLAs, ranks, ...)
+    def plain: (type == "string" and length > 0 and . != "{}" and (test("^[0-9]+\\|") | not))
+      or (type == "object" and (.type == "doc" or (has("value") and has("id"))))
+      or (type == "array" and length > 0 and all(.[]; type == "object" and has("value")));
+    def field($label; $v): if ($v | contains("\n")) then bold + $label + off + "\n" + ($v | split("\n") | map("  " + .) | join("\n"))
+      else bold + $label + off + "  " + $v end;
+
+    .fields as $f | ($conf.labels // {}) as $labels | ($conf.hide // []) as $hide
+    | ([$f[] | objects | .requestType?.name // empty][0] // $f.issuetype.name) as $type
+    | bold + .key + "  " + ($f.summary // "") + off,
+      dim + ([$f.status.name, $f.priority.name, $type] | map(select(. != null)) | join("  ·  ")) + off,
+      dim + "Reporter " + ($f.reporter.displayName // "?") + "  ·  created " + ($f.created | when)
+        + "  ·  updated " + ($f.updated | when) + off,
+
+      ( [ ($labels | to_entries[] | ($f[.key] | fval) as $v | select($v != "") | field(.value; $v)),
+          ($f.description | fval | select(. != "") | field("Description"; .)) ]
+        | select(length > 0) | heading("Request"), .[] ),
+
+      ( if $conf.other == false then empty else
+          [ $f | to_entries[] | select((.key | startswith("customfield_")) and ($labels[.key] == null)
+              and (.key | IN($hide[]) | not) and (.value | plain))
+            | dim + .key + off + "  " + (.value | fval | split("\n") | first | .[0:120]) ]
+          | select(length > 0) | heading("Other fields") + dim + "  (name them in config: sources.jira.labels)" + off, .[]
+        end ),
+
+      ( ($f.comment.comments // []) as $cs
+        | heading("Comments (\($cs | length))" + if $cs | length > 0 then dim + "  newest first" + off else "" end),
+          ($cs | reverse[]
+            | "\n" + bold + rgb("137;180;250") + (.author.displayName // "?") + off
+              + "  " + dim + (.created | when) + off
+              + (if .jsdPublic == false then "  " + rgb("250;179;135") + "internal" + off else "" end)
+              + "\n" + (.body | adf("  ") | rtrim)) )
+  ' $f
+}
+
+case $1 in
+  fetch)   fetch "$2" ;;
+  preview) preview "$2" ;;
+  *)       print -u2 "usage: jira fetch <jql> | jira preview <key>"; exit 1 ;;
+esac
