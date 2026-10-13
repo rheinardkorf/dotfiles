@@ -14,16 +14,19 @@
 #   layouts  {name: {window: [pane, ...]}}            one tmux window per context
 #   sources  {name: {...}}                            handed to the source script
 #   seen_after                                        e.g. "2s"
+#   glow_style                                        glow style name or JSON path
+#                                                     (default: glow's own, from glow.yml)
 #
 # Sources are scripts in ~/.config/panel/sources/<name>:
 #   <source> fetch <query>   print the items as JSON: [{id, title, status, updated, url}]
 #                            (updated in epoch seconds). $PANEL_SOURCE_CACHE is theirs to
 #                            keep more in; $PANEL_SINCE is the last good fetch (epoch).
-#   <source> preview <id>    print the preview of one item, from the cache only
+#   <source> preview <id>    print the preview of one item as Markdown, from the cache
+#                            only (panel renders it with glow)
 #
 # In a pane: an item is marked seen after the cursor rests on it (seen_after);
 # ● new, ◆ changed since you saw it.
-#   enter   full preview in less        ctrl-o  open in the browser
+#   enter   full preview (glow pager)   ctrl-o  open in the browser
 #   alt-s   mark all seen               alt-u   mark this one unseen
 #   ctrl-r  fetch now                   esc     clear the filter
 emulate -L zsh
@@ -205,10 +208,29 @@ lines() {
   update_window_name
 }
 
-preview() {   # preview <pane> <id>
-  local source="$(pane_source $1)"
+# glow_style in the config, else glow's own style (glow.yml), so both look the
+# same. glow drops colour when piped on "auto", so that and a missing file -> dark.
+glow_style() {
+  local s="$(conf '.glow_style // empty')"
+  [[ -n $s ]] || s="$(sed -nE 's/^style:[[:space:]]*"?([^"]*)"?[[:space:]]*$/\1/p' \
+    "${XDG_CONFIG_HOME:-$HOME/.config}/glow/glow.yml" 2>/dev/null)"
+  s=${s/#\~/$HOME}
+  [[ -z $s || $s == auto || ( $s == */* && ! -f $s ) ]] && s=dark
+  print -r -- $s
+}
+
+# preview <pane> <id> [full]: the source's Markdown, rendered by glow to fit the
+# preview pane, or in glow's pager when full.
+preview() {
+  local source="$(pane_source $1)" style
   [[ -n $2 ]] || return 0
-  run_source $source preview $2
+  style="$(glow_style)"
+  if [[ $3 == full ]]; then
+    local cols=${COLUMNS:-$(tput cols 2>/dev/null || print 100)}
+    run_source $source preview $2 | glow -p -s "$style" -w $(( cols > 120 ? 120 : cols )) -
+  else
+    run_source $source preview $2 | glow -s "$style" -w ${FZF_PREVIEW_COLUMNS:-80} -
+  fi
 }
 
 open_url() {
@@ -232,7 +254,7 @@ view() {
       --preview-window 'right,60%,wrap,border-left,<110(down,65%,wrap,border-top)' \
       --bind "focus:execute-silent($self _focus $pane {1})" \
       --bind "esc:clear-query" \
-      --bind "enter:execute($self _preview $pane {1} | less -R)" \
+      --bind "enter:execute($self _preview $pane {1} full)" \
       --bind "ctrl-o:execute-silent($self _open $pane {1})" \
       --bind "ctrl-r:execute-silent($self fetch $pane >/dev/null 2>&1 &)" \
       --bind "alt-s:execute-silent($self _seen_all $pane)+reload($self _lines $pane)" \
@@ -271,7 +293,7 @@ case $1 in
   fetcher)   fetcher $2 ;;
   view)      [[ -n $2 ]] || die "usage: panel view <pane>"; view $2 ;;
   _lines)    lines $2 ;;
-  _preview)  preview $2 $3 ;;
+  _preview)  preview $2 $3 $4 ;;
   _focus)    on_focus $2 $3 ;;
   _open)     open_url $2 $3 ;;
   _seen_all) mark_seen $2 ${(f)"$(jq -r '.[].id' "$PANEL_CACHE/panes/$2/items.json")"} ;;

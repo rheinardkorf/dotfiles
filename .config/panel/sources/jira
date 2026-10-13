@@ -3,7 +3,8 @@
 #
 #   jira fetch <jql>     list the tickets, and refresh the cached details
 #                        (fields + comments) of new or changed ones
-#   jira preview <key>   the ticket, its request fields and comments, from the cache
+#   jira preview <key>   the ticket, its request fields and comments as Markdown,
+#                        from the cache
 #
 # Config (.sources.jira in panel's config.json), all optional:
 #   site    Atlassian site for links (default: the one acli is logged in to)
@@ -76,50 +77,58 @@ fetch() {
 preview() {
   local f="$items/$1.json"
   if [[ ! -f $f ]]; then
-    print "No details cached for $1 yet: they arrive with the next fetch."
+    print "No details cached for **$1** yet: they arrive with the next fetch."
     return
   fi
   jq -r --argjson conf "$conf" '
-    def rgb($c): "\u001b[38;2;\($c)m";
-    def off: "\u001b[0m";  def bold: "\u001b[1m";  def dim: "\u001b[2m";
-    def heading($t): "\n" + rgb("203;166;247") + bold + "── " + $t + off;
     def rtrim: sub("\\s+$"; "");
     def epoch: (.[0:19] + "Z" | fromdateiso8601)
       - ((if .[-5:-4] == "-" then -1 else 1 end) * ((.[-4:-2] | tonumber) * 3600 + (.[-2:] | tonumber) * 60));
     def when: if . == null then "?" else epoch | strflocaltime("%a %-d %b %H:%M") end;
+    # one line of a table cell / list item
+    def oneline: gsub("\\s*\n\\s*"; " ") | gsub("\\|"; "\\|");
 
-    # Atlassian Document Format (rich text) -> plain text
-    def adf($ind):
-      def item($bullet): (.content // []) | adf($ind + "  ") | sub("^" + $ind + "  "; $ind + $bullet);
-      if type == "array" then map(adf($ind)) | join("")
+    # Atlassian Document Format (rich text) -> Markdown
+    def adf:
+      def kids: (.content // []) | map(adf) | join("");
+      def marked($t): reduce (.marks // [])[] as $m ($t;
+          if $m.type == "strong" then "**\(.)**" elif $m.type == "em" then "*\(.)*"
+          elif $m.type == "code" then "`\(.)`" elif $m.type == "strike" then "~~\(.)~~"
+          elif $m.type == "link" then "[\(.)](\($m.attrs.href))" else . end);
+      def indent($p): split("\n") | map(if . == "" then . else $p + . end) | join("\n");
+      def item($bullet): kids | rtrim | indent("   ") | $bullet + .[3:] + "\n";
+      if type == "array" then map(adf) | join("")
       elif type != "object" then (. // "" | tostring)
-      elif .type == "text" then (.text // "") as $t
-        | ([.marks[]? | select(.type == "link") | .attrs.href][0]) as $href
-        | if $href and $href != $t then "\($t) (\($href))" else $t end
-      elif .type == "hardBreak" then "\n" + $ind
-      elif .type == "mention" then (.attrs.text // "@someone")
+      elif .type == "text" then marked(.text // "")
+      elif .type == "hardBreak" then "  \n"
+      elif .type == "mention" then "**\(.attrs.text // "@someone")**"
       elif .type == "emoji" then (.attrs.text // .attrs.shortName // "")
-      elif .type == "inlineCard" or .type == "blockCard" or .type == "embedCard" then (.attrs.url // "")
-      elif .type == "status" then "[\(.attrs.text // "")]"
+      elif .type == "inlineCard" or .type == "blockCard" or .type == "embedCard" then "<\(.attrs.url // "")>"
+      elif .type == "status" then "`\(.attrs.text // "")`"
       elif .type == "date" then (.attrs.timestamp | tonumber / 1000 | strftime("%Y-%m-%d"))
-      elif .type == "paragraph" or .type == "heading" then $ind + ((.content // []) | adf($ind)) + "\n"
-      elif .type == "bulletList" then (.content // []) | map(item("• ")) | join("")
-      elif .type == "orderedList" then (.content // []) | to_entries | map(.key as $i | .value | item("\($i + 1). ")) | join("")
-      elif .type == "codeBlock" then ((.content // []) | adf("") | split("\n") | map($ind + "    " + .) | join("\n")) + "\n"
-      elif .type == "blockquote" then (.content // []) | adf($ind + "│ ")
-      elif .type == "rule" then $ind + "────────\n"
-      elif (.type | test("^media")) then $ind + "[attachment]\n"
-      elif .type == "table" then (.content // []) | map($ind + ((.content // []) | map((.content // []) | adf("") | rtrim | gsub("\n"; " ")) | join(" │ ")) + "\n") | join("")
-      else (.content // []) | adf($ind) end;
+      elif .type == "paragraph" then kids + "\n\n"
+      elif .type == "heading" then ("#" * ((.attrs.level // 3) + 2 | if . > 6 then 6 else . end)) + " " + kids + "\n\n"
+      elif .type == "bulletList" then ((.content // []) | map(item("-  ")) | join("")) + "\n"
+      elif .type == "orderedList" then ((.content // []) | to_entries | map(.key as $i | .value | item("\($i + 1). ")) | join("")) + "\n"
+      elif .type == "listItem" then kids
+      elif .type == "codeBlock" then "```\(.attrs.language // "")\n" + kids + "\n```\n\n"
+      elif .type == "blockquote" then (kids | rtrim | indent("> ")) + "\n\n"
+      elif .type == "rule" then "---\n\n"
+      elif .type == "panel" then (kids | rtrim | indent("> ")) + "\n\n"
+      elif (.type | test("^media")) then "*[attachment]*\n\n"
+      elif .type == "table" then ((.content // []) | map("| " + ((.content // []) | map(adf | rtrim | oneline) | join(" | ")) + " |")) as $rows
+        | ($rows[0] // "") + "\n" + (if $rows | length > 0 then "|" + ((.content[0].content // []) | map(" --- |") | join("")) + "\n" else "" end)
+          + ($rows[1:] | join("\n")) + "\n\n"
+      else kids end;
 
-    # A field value as text (options, users, rich text, plain values)
+    # A field value as Markdown (options, users, rich text, plain values)
     def fval:
       if . == null then ""
       elif type == "string" then .
       elif type == "number" or type == "boolean" then tostring
       elif type == "array" then map(fval) | map(select(. != "")) | join(", ")
       elif type == "object" then
-        if .type == "doc" then adf("") | rtrim
+        if .type == "doc" then adf | rtrim
         elif has("value") then (.value | tostring) + (if .child.value then " → " + .child.value else "" end)
         elif has("displayName") then .displayName
         elif has("name") then .name
@@ -129,34 +138,36 @@ preview() {
     def plain: (type == "string" and length > 0 and . != "{}" and (test("^[0-9]+\\|") | not))
       or (type == "object" and (.type == "doc" or (has("value") and has("id"))))
       or (type == "array" and length > 0 and all(.[]; type == "object" and has("value")));
-    def field($label; $v): if ($v | contains("\n")) then bold + $label + off + "\n" + ($v | split("\n") | map("  " + .) | join("\n"))
-      else bold + $label + off + "  " + $v end;
+    # Short values as a list; long or multi-line ones as their own block
+    def short: (contains("\n") | not) and length <= 80;
 
     .fields as $f | ($conf.labels // {}) as $labels | ($conf.hide // []) as $hide
     | ([$f[] | objects | .requestType?.name // empty][0] // $f.issuetype.name) as $type
-    | bold + .key + "  " + ($f.summary // "") + off,
-      dim + ([$f.status.name, $f.priority.name, $type] | map(select(. != null)) | join("  ·  ")) + off,
-      dim + "Reporter " + ($f.reporter.displayName // "?") + "  ·  created " + ($f.created | when)
-        + "  ·  updated " + ($f.updated | when) + off,
+    | [ $labels | to_entries[] | {label: .value, v: ($f[.key] | fval)} | select(.v != "") ]
+      + [ $f.description | fval | select(. != "") | {label: "Description", v: .} ] as $req
+    | "# \(.key)  \($f.summary // "")\n",
+      "**\($f.status.name // "?")**  ·  \([$f.priority.name, $type] | map(select(. != null)) | join("  ·  "))  ",
+      "Reporter \($f.reporter.displayName // "?")  ·  created \($f.created | when)  ·  updated \($f.updated | when)\n",
 
-      ( [ ($labels | to_entries[] | ($f[.key] | fval) as $v | select($v != "") | field(.value; $v)),
-          ($f.description | fval | select(. != "") | field("Description"; .)) ]
-        | select(length > 0) | heading("Request"), .[] ),
+      ( select($req | length > 0)
+        | "## Request\n",
+          ( [$req[] | select(.v | short)] | select(length > 0)
+            | (.[] | "-  **\(.label):** \(.v)"), "" ),
+          ( $req[] | select(.v | short | not) | "**\(.label)**\n\n\(.v)\n" ) ),
 
       ( if $conf.other == false then empty else
           [ $f | to_entries[] | select((.key | startswith("customfield_")) and ($labels[.key] == null)
               and (.key | IN($hide[]) | not) and (.value | plain))
-            | dim + .key + off + "  " + (.value | fval | split("\n") | first | .[0:120]) ]
-          | select(length > 0) | heading("Other fields") + dim + "  (name them in config: sources.jira.labels)" + off, .[]
+            | "| `\(.key)` | \(.value | fval | split("\n") | first | .[0:100] | oneline) |" ]
+          | select(length > 0)
+          | "## Other fields\n\n*Name them in the config: `sources.jira.labels`*\n\n| field | value |\n| --- | --- |", .[], ""
         end ),
 
       ( ($f.comment.comments // []) as $cs
-        | heading("Comments (\($cs | length))" + if $cs | length > 0 then dim + "  newest first" + off else "" end),
-          ($cs | reverse[]
-            | "\n" + bold + rgb("137;180;250") + (.author.displayName // "?") + off
-              + "  " + dim + (.created | when) + off
-              + (if .jsdPublic == false then "  " + rgb("250;179;135") + "internal" + off else "" end)
-              + "\n" + (.body | adf("  ") | rtrim)) )
+        | "## Comments (\($cs | length))\(if $cs | length > 1 then "  ·  newest first" else "" end)\n",
+          ( $cs | reverse[]
+            | "### \(.author.displayName // "?")  ·  \(.created | when)\(if .jsdPublic == false then "  ·  *internal*" else "" end)\n",
+              (.body | adf | rtrim), "" ) )
   ' $f
 }
 
