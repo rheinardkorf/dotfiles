@@ -61,7 +61,8 @@ function parseIoreg(out) {
 // "notify-me" wins. Call inside the lock (it may talk to the ports).
 async function findPort() {
   if (process.env.NOTIFY_ME_PORT) return process.env.NOTIFY_ME_PORT;
-  const out = execFileSync("ioreg", ["-r", "-c", "IOUSBHostDevice", "-l", "-w0"], { encoding: "utf8" });
+  // maxBuffer: the default 1 MB is too small when a USB keyboard (e.g. a Moonlander) dumps its HID descriptors
+  const out = execFileSync("ioreg", ["-r", "-c", "IOUSBHostDevice", "-l", "-w0"], { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
   const ports = parseIoreg(out);
   if (ports.length === 1) return ports[0];
   for (const port of ports) {
