@@ -9,6 +9,7 @@
 //   mote port                      the mote's serial port (checked with PING)
 //   mote config get <key> | set <key> <value>
 //   mote history [<dir>]           download the band's raw history packets to <dir>/<stamp>.hex
+//   mote watch [<seconds>]         print the mote's events live (Ctrl-C to stop; other commands wait)
 //   mote reboot
 //
 // Exit codes: 0 ok, 1 firmware ERR (or not connected), 2 usage, 3 no mote, 4 timeout or port busy.
@@ -127,23 +128,37 @@ function lineCollector(onDone, onLine = () => {}) {
   };
 }
 
+function openPort(port) {
+  let fd;
+  try {
+    fd = fs.openSync(port, fs.constants.O_RDWR | fs.constants.O_NOCTTY | fs.constants.O_NONBLOCK);
+  } catch (e) {
+    throw new CliError(3, `can't open ${port}: ${e.code}`);
+  }
+  const input = new tty.ReadStream(fd);
+  input.setRawMode(true);
+  const output = new tty.WriteStream(fd);
+  const close = () => {
+    input.removeAllListeners("data");
+    input.destroy();
+    output.destroy();
+  };
+  return { input, output, close };
+}
+
 function request(port, line, timeoutMs, onLine) {
   return new Promise((resolve, reject) => {
-    let fd;
+    let io;
     try {
-      fd = fs.openSync(port, fs.constants.O_RDWR | fs.constants.O_NOCTTY | fs.constants.O_NONBLOCK);
+      io = openPort(port);
     } catch (e) {
-      return reject(new CliError(3, `can't open ${port}: ${e.code}`));
+      return reject(e);
     }
-    const input = new tty.ReadStream(fd);
-    input.setRawMode(true);
-    const output = new tty.WriteStream(fd);
+    const { input, output } = io;
     let sent = false;
     const finish = (err, lines) => {
       clearTimeout(timer);
-      input.removeAllListeners("data");
-      input.destroy();
-      output.destroy();
+      io.close();
       err ? reject(err) : resolve(lines);
     };
     const collect = lineCollector((lines) => finish(null, lines), onLine);
@@ -192,11 +207,14 @@ function duration(s) {
   return `${Math.floor(s / 3600)}h${String(Math.floor((s % 3600) / 60)).padStart(2, "0")}m`;
 }
 
+const PHONE_HINT = { off: " (mote config set ancs on, then mote reboot)", advertising: " (waiting for the iPhone)" };
+
 function formatStatus(f) {
   const lines = [f.band === "unset" ? "band     not set up: mote config set band.addr <addr>, then mote reboot"
     : `band     ${f.band} for ${duration(f.since)} (${f.addr})`];
   if (f.battery !== "-1") lines.push(`battery  ${f.battery}%`);
   if (f.steps !== "-1") lines.push(`today    ${f.steps} steps, ${f.dist} m, ${f.kcal} kcal`);
+  if (f.phone) lines.push(`phone    ${f.phone}${f.phone === "off" ? "" : ` for ${duration(f.phone_since)}`}${PHONE_HINT[f.phone] || ""}`);
   lines.push(`mote     fw ${f.fw}, up ${duration(f.uptime)}, heap ${f.mem_free} B free, ble ${f.idf_free} B free`);
   return lines.join("\n");
 }
@@ -204,6 +222,31 @@ function formatStatus(f) {
 function stamp(d = new Date()) {
   const p = (n) => String(n).padStart(2, "0");
   return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
+}
+
+// Print the mote's EVT/LOG lines as they come, with local times, until Ctrl-C or `seconds` pass. Holds the lock
+// meanwhile, so other mote commands (hooks) wait and then fail with exit 4.
+async function watch(seconds, print) {
+  await withLock(async () => {
+    const port = await findPort();
+    await request(port, timeLine(), 3000).catch(() => {}); // e.g. still booting: watch anyway
+    const io = openPort(port);
+    let buf = "";
+    io.input.on("data", (chunk) => {
+      buf += chunk.toString("latin1");
+      let i;
+      while ((i = buf.indexOf("\n")) >= 0) {
+        const line = buf.slice(0, i).replace(/\r$/, "");
+        buf = buf.slice(i + 1);
+        if (/^(EVT|LOG) /.test(line)) print(`${new Date().toTimeString().slice(0, 8)} ${line}`);
+      }
+    });
+    await new Promise((resolve) => {
+      process.once("SIGINT", resolve);
+      if (seconds) setTimeout(resolve, seconds * 1000);
+    });
+    io.close();
+  });
 }
 
 // The band clears history once the mote ACKs it, so each packet is written out as soon as it arrives.
@@ -238,6 +281,7 @@ function statusJson(f) {
   return {
     band: { state: f.band, since_s: num(f.since), addr: f.addr || null, last_data_s: num(f.last_data), battery_pct: num(f.battery) },
     today: steps === null ? null : { steps, dist_m: num(f.dist), kcal: num(f.kcal) },
+    phone: f.phone ? { state: f.phone, since_s: num(f.phone_since) } : null,
     mote: { fw: f.fw, uptime_s: num(f.uptime), mem_free: num(f.mem_free), idf_free: num(f.idf_free), time_source: f.time_source },
   };
 }
@@ -245,7 +289,7 @@ function statusJson(f) {
 // --- commands --------------------------------------------------------------------------------
 
 const USAGE = `usage: mote buzz <alert> | buzz pattern <a>,<b>,... | stop | status [--json | --raw] | connected | port
-            | config get <key> | config set <key> <value> | history [<dir>] | reboot
+            | config get <key> | config set <key> <value> | history [<dir>] | watch [<seconds>] | reboot
 alerts: ${ALERTS.join(" ")}`;
 
 async function run(argv, print = console.log) {
@@ -288,6 +332,9 @@ async function run(argv, print = console.log) {
       }
       throw new CliError(2, USAGE);
     }
+    case "watch":
+      if (rest.length > 1 || (rest[0] && !/^\d+$/.test(rest[0]))) throw new CliError(2, USAGE);
+      return watch(Number(rest[0] || 0), print);
     case "history":
       if (rest.length > 1) throw new CliError(2, USAGE);
       return history(rest[0] || HISTORY_DIR, print);
