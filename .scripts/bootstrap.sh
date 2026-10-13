@@ -147,7 +147,7 @@ if ! command -v claude >/dev/null && [[ ! -d "$(dirname "$CLAUDE_SETTINGS")" ]];
 elif ! command -v jq >/dev/null; then
   $DRY_RUN && todo "hooks (jq is installed in the Packages step)" || fail "jq needed to merge hooks"
 else
-  hooks=( "Notification waiting" "Stop done" "UserPromptSubmit clear" "PostToolUse resume" "SessionEnd clear" )
+  hooks=( "Notification waiting" "Stop done" "UserPromptSubmit clear" "PostToolUse resume" "PostToolUseFailure resume" "SessionEnd clear" )
   [[ -f "$CLAUDE_SETTINGS" ]] || { $DRY_RUN || { mkdir -p "$(dirname "$CLAUDE_SETTINGS")"; echo '{}' > "$CLAUDE_SETTINGS"; }; }
   add=()
   for h in "${hooks[@]}"; do

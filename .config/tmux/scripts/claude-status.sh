@@ -4,7 +4,7 @@
 #
 #   claude-status.sh waiting        needs you (permission prompt, question)   󰚩
 #   claude-status.sh done           finished its turn                         ✓
-#   claude-status.sh resume         clear 󰚩 once work continues (e.g. after approving)
+#   claude-status.sh resume         clear 󰚩 once work continues (after approving, or a tool failed)
 #   claude-status.sh clear          remove the marker (you replied, declined, or the session ended)
 #
 # Two outputs:
