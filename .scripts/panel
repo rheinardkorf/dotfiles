@@ -297,7 +297,7 @@ lines() {   # lines <pane> <pid>
     ( .[] | state($seen; $src) as $st
       | (if $st == "new" then rgb("250;179;135") + "●" + $off
          elif $st == "changed" then rgb("249;226;175") + "◆" + $off else " " end) as $mark
-      | "\(.id)\t\($mark) \(if $w > 0 then $bold + (.key // .id | pad($w + 2)) + $off + " " else "" end)\($dim)\(.status // "" | pad($sw + 1)) \(.at // .updated | age | pad(7))\($off) \(.title // "")" )
+      | "\(.id)\t\($mark) \(if $w > 0 then $bold + (.key // .id | pad($w + 2)) + $off + " " else "" end)\($dim)\(.status // "" | pad($sw + 1)) \(.at // .updated | age | pad(7))\($off) \(.title // "" | sub("^\\s+"; ""))" )
   ' $dir/items.json
   update_window_name
 }

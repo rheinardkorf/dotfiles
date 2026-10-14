@@ -3,6 +3,8 @@
 #
 #   jira fetch <jql>     list the tickets, and refresh the cached details
 #                        (fields + comments) of new or changed ones
+#   jira fetch sla:<jql> the same tickets, only those with a live SLA timer: still
+#                        counting down first (soonest deadline), then breached, then paused
 #   jira preview <key>   the ticket, its request fields and comments as Markdown,
 #                        from the cache
 #   jira search <words>  "<key>\t<snippet>" for cached tickets whose summary,
@@ -173,6 +175,36 @@ preview() {
   ' $f
 }
 
+# SLA timers: the service desk's SLA fields (objects with an ongoingCycle). For each
+# ticket, its most urgent live timer: the earliest deadline among running ones.
+fetch_sla() {
+  local list keys
+  list="$(fetch "$1")" || return 1
+  local -a files=( ${(f)"$(jq -r '.[].id' <<<"$list" | sed "s|.*|$items/&.json|")"} )
+  files=( ${^files}(N) )
+  (( $#files )) || { print -r -- '[]'; return 0 }
+  jq -s --argjson list "$list" '
+    def epoch: (.[0:19] + "Z" | fromdateiso8601)
+      - ((if .[-5:-4] == "-" then -1 else 1 end) * ((.[-4:-2] | tonumber) * 3600 + (.[-2:] | tonumber) * 60));
+    def dur: (if . < 0 then -. else . end) as $s
+      | if $s < 3600 then "\($s / 60 | floor)m" elif $s < 86400 then "\($s / 3600 | floor)h" else "\($s / 86400 | floor)d" end;
+    (map({(.key): .}) | add) as $d
+    | [ $list[] | . as $it | $d[.id] as $t | select($t != null)
+        | [ $t.fields[] | objects | select(.ongoingCycle != null)
+            | {name, paused: (.ongoingCycle.paused // false), breached: (.ongoingCycle.breached // false),
+               due: (.ongoingCycle.breachTime.iso8601 | if . then epoch else null end)} ] as $slas
+        | ($slas | map(select(.paused | not)) | sort_by(.due) | first) as $live
+        | ($live // ($slas | first)) as $s
+        | select($s != null)
+        | $it + { at: $s.due,
+                  status: (if $s.paused then "paused" elif $s.breached then "breached ✗"
+                           else (($s.due - now) | dur) + " left" end),
+                  title: ($it.title + "  · " + ($s.name | sub("^Task: "; ""))),
+                  rank: (if $s.paused then 2 elif $s.breached then 1 else 0 end) } ]
+    | (map(select(.rank == 0)) | sort_by(.at)) + (map(select(.rank == 1)) | sort_by(-.at)) + map(select(.rank == 2))
+    | map(del(.rank))' $files
+}
+
 search() {
   local -a files=( $items/*.json(N) )
   (( $#files )) || return 0
@@ -192,7 +224,7 @@ search() {
 }
 
 case $1 in
-  fetch)   fetch "$2" ;;
+  fetch)   if [[ $2 == sla:* ]]; then fetch_sla "${2#sla:}"; else fetch "$2"; fi ;;
   preview) preview "$2" ;;
   search)  search "$2" ;;
   *)       print -u2 "usage: jira fetch <jql> | jira preview <key> | jira search <words>"; exit 1 ;;

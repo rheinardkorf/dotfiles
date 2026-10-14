@@ -6,10 +6,16 @@
 
   // A pane: a source, a query for it, and how often to fetch
   "panes": {
-    "my-tickets": {
-      "title": "My tickets",
+    "jira": {
+      "title": "Jira",
       "source": "jira",
-      "query": "assignee = currentUser() AND statusCategory != Done ORDER BY updated DESC",
+      "views": {
+        "assigned": "assignee = currentUser() AND statusCategory != Done ORDER BY updated DESC",
+        // open tickets that @-mention me (includes ones assigned to me)
+        "mentioned": "text ~ currentUser() AND statusCategory != Done ORDER BY updated DESC",
+        // my open tickets with a live SLA timer: counting down first, then breached
+        "sla": "sla:assignee = currentUser() AND statusCategory != Done ORDER BY updated DESC"
+      },
       "every": "2m"
     },
     // GitHub, one pane with views (tab switches): PR views are GitHub searches;
@@ -44,7 +50,7 @@
   // A layout is a tmux session: one window per context, one pane per entry
   "layouts": {
     "work": {
-      "jira": ["my-tickets"],
+      "jira": ["jira"],
       "github": ["github"],
       "aws": ["aws"],
       "calendar": ["calendar"]
