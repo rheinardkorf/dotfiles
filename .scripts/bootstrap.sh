@@ -15,6 +15,7 @@ TMUX_DIR="${TMUX_DIR:-$HOME/.config/tmux}"
 CATPPUCCIN_VERSION="v2.3.1"   # keep in sync with theme-catppuccin.conf
 CLAUDE_SETTINGS="${CLAUDE_SETTINGS:-$HOME/.claude/settings.json}"
 CLAUDE_STATUS="~/.config/tmux/scripts/claude-status.sh"
+PANEL_EVENT='$HOME/.scripts/panel event agents'
 
 ok=0; changed=0; missing=0; problems=0
 say()  { printf '  %-8s %s\n' "$1" "$2"; }
@@ -140,31 +141,39 @@ else
     || fail "catppuccin clone failed"
 fi
 
-# --- Claude Code status hooks (🔔 / ✓ in the tmux bar) -------------------------
+# --- Claude Code hooks: status (🔔 / ✓ in the tmux bar) and panel's agents pane --
 echo "Claude Code hooks"
 if ! command -v claude >/dev/null && [[ ! -d "$(dirname "$CLAUDE_SETTINGS")" ]]; then
   say "skip" "Claude Code not installed"
 elif ! command -v jq >/dev/null; then
   $DRY_RUN && todo "hooks (jq is installed in the Packages step)" || fail "jq needed to merge hooks"
 else
-  hooks=( "Notification waiting" "Stop done" "UserPromptSubmit clear" "PostToolUse resume" "PostToolUseFailure resume" "SessionEnd clear" )
+  # "<event>|<command>|<async>": async hooks run in the background (Claude doesn't wait)
+  hooks=( "Notification|$CLAUDE_STATUS waiting|false" "Stop|$CLAUDE_STATUS done|false"
+          "UserPromptSubmit|$CLAUDE_STATUS clear|false" "PostToolUse|$CLAUDE_STATUS resume|false"
+          "PostToolUseFailure|$CLAUDE_STATUS resume|false" "SessionEnd|$CLAUDE_STATUS clear|false" )
+  for event in UserPromptSubmit Stop Notification PostToolUse PostToolUseFailure SubagentStart SubagentStop SessionStart SessionEnd; do
+    hooks+=( "$event|$PANEL_EVENT|true" )
+  done
   [[ -f "$CLAUDE_SETTINGS" ]] || { $DRY_RUN || { mkdir -p "$(dirname "$CLAUDE_SETTINGS")"; echo '{}' > "$CLAUDE_SETTINGS"; }; }
   add=()
   for h in "${hooks[@]}"; do
-    event="${h%% *}" cmd="$CLAUDE_STATUS ${h#* }"
+    IFS='|' read -r event cmd async <<<"$h"
+    label="$event hook ($(basename "${cmd%% *}"))"
     if [[ -f "$CLAUDE_SETTINGS" ]] && jq -e --arg e "$event" --arg c "$cmd" \
          '[.hooks[$e][]?.hooks[]?.command] | index($c)' "$CLAUDE_SETTINGS" >/dev/null 2>&1; then
-      okay "$event hook"
+      okay "$label"
     else
-      todo "$event hook"; add+=("$h")
+      todo "$label"; add+=("$h")
     fi
   done
   if (( ${#add[@]} )) && ! $DRY_RUN; then
     cp "$CLAUDE_SETTINGS" "$CLAUDE_SETTINGS.bak-bootstrap"
     tmp="$(mktemp)"; cp "$CLAUDE_SETTINGS" "$tmp"
     for h in "${add[@]}"; do
-      jq --arg e "${h%% *}" --arg c "$CLAUDE_STATUS ${h#* }" \
-        '.hooks[$e] = ((.hooks[$e] // []) + [{"hooks": [{"type": "command", "command": $c}]}])' \
+      IFS='|' read -r event cmd async <<<"$h"
+      jq --arg e "$event" --arg c "$cmd" --argjson a "$async" \
+        '.hooks[$e] = ((.hooks[$e] // []) + [{"hooks": [{"type": "command", "command": $c} + (if $a then {"async": true} else {} end)]}])' \
         "$tmp" > "$tmp.new" && mv "$tmp.new" "$tmp"
     done
     if jq -e . "$tmp" >/dev/null; then mv "$tmp" "$CLAUDE_SETTINGS"; say "" "(previous settings saved as $(basename "$CLAUDE_SETTINGS").bak-bootstrap)"
