@@ -5,8 +5,8 @@ A tmux control panel of fzf lists over cached data. **Sources** fetch data, a
 **tmux** shows it. Data only ever moves in one direction:
 
 ```
- Jira / GitHub / AWS / Google        (outside world)
-            │  only the fetcher talks to these
+ Jira / GitHub / AWS / Google        (outside world)     Claude Code hooks
+            │  only the fetcher talks to these               │ panel event agents
             ▼
  ┌──────────────────────┐   every N min,    ┌──────────────────────────────┐
  │  fetcher (tmux win)  │──runs──────────▶  │  source scripts              │
@@ -55,6 +55,7 @@ Each source is a small zsh script in `sources/` with up to three commands:
 | `fetch <query>` | prints the list as JSON items, and caches whatever previews will need | the **only** place that calls an API |
 | `preview <id>` | prints one item as **Markdown** | reads the **cache only** |
 | `search <words>` | prints `id<TAB>snippet` for items whose content matches | cache only (optional) |
+| `event` | records an event pushed to it on stdin (`panel event <source>`); exit 0 when something changed, printing ids to mark seen | optional; writes only to its cache |
 
 Every item has the same basic shape: `id`, `title`, `status`, `updated`
 (epoch seconds) and `url`. Optional extras:
@@ -64,7 +65,12 @@ Every item has the same basic shape: `id`, `title`, `status`, `updated`
 - `seen`: the key seen state is kept under, when it isn't the id (e.g. a
   recurring meeting series)
 - `spark` and `spark_colors`: a short strip of bars, one colour letter per bar
-  (`g`reen, `r`ed, `y`ellow, `b`lue, `d`im)
+  (`g`reen, `r`ed, `y`ellow, `b`lue, `d`im, `o`range)
+- `mark` and `mark_color`: the glyph shown instead of `●` / `◆` when unseen
+- `status_color`: the status in that colour instead of dim
+- `quiet_before`: a time; an item you've never looked at counts as seen then,
+  so it's only marked when it changes after that (not just for being new)
+- a `url` of `tmux:<target>` (e.g. `tmux:%33`) opens by switching tmux there
 
 The engine knows nothing about any service: it only understands items, so a
 new source is just a new script. Each source handles its service's quirks
@@ -80,6 +86,16 @@ internally:
   changes), SQS queues (dead-letter queues with messages first).
 - **calendar** (gog, always `--readonly`): today and the next days, with a
   countdown and RSVP state.
+- **agents** (local files): every running Claude Code session from
+  `~/.claude/sessions/<pid>.json` (name, folder, busy / idle, tmux pane), with
+  the title, last prompt and reply from its transcript, and this turn's
+  sub-agents as indented rows. Its spark shows activity over the last hour and
+  how full the context is (`context_window` in its config). Hooks in `~/.claude/settings.json` (async, all
+  calling `panel event agents`) add what the files can't say: `●` finished
+  (Stop, SubagentStop), `?` waiting on a permission prompt (also in the status
+  column), and prompting the session clears the mark and its sub-agents. The
+  last known state of every session is kept (`known/`), for showing or resuming
+  ended sessions later. ctrl-o jumps to the session's tmux pane.
 
 ## 3. The engine: `~/.scripts/panel`
 
@@ -95,6 +111,9 @@ internally:
 - **Views**: each pane runs `panel view <pane>`, an fzf list fed by
   `panel _lines`, which turns cached items into lines (marker, key, status,
   countdown or age, spark, title). Columns size themselves to fit.
+- **Pushes**: `panel event <source>` hands stdin to the source's `event`; when
+  something changed it fetches the source's open panes at once and marks what
+  the source says as seen. It never fails or prints, since hooks call it.
 - **Live refresh**: each open view has its own socket (`fzf.<pid>.sock`).
   After a fetch, the fetcher sends "reload" to every open view of that pane;
   the list updates without moving the cursor.
@@ -125,7 +144,7 @@ fingerprint changes, and contributions never.
 | tab / shift-tab | next / previous view |
 | cmd-f (alt-f) | find inside items; esc leaves |
 | cmd+shift+h (alt-h) | show / hide the pane's hidden views |
-| enter / ctrl-o | full preview / open in the browser |
+| enter / ctrl-o | full preview / open in the browser (agents: jump to the tmux pane) |
 | alt-s / alt-u | mark all seen / mark this one unseen |
 | ctrl-r | fetch this view now |
 | home / end | top / bottom of the list (page up / down: a page) |

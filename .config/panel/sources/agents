@@ -1,0 +1,336 @@
+#!/usr/bin/env zsh
+# panel source: running agents (Claude Code sessions for now) and their sub-agents.
+#
+#   agents fetch active     every running session, with this turn's sub-agents
+#   agents preview <id>     a session (or sub-agent) as Markdown, from the cache
+#   agents search <words>   "<id>\t<snippet>" for sessions whose name, title, folder,
+#                           last prompt or last reply have all the words
+#   agents event            a Claude Code hook payload on stdin (through `panel event
+#                           agents`): records it; exit 0 when something changed, and
+#                           prints the ids to mark seen
+#
+# Everything is local: ~/.claude/sessions/<pid>.json lists the running sessions
+# (name, folder, busy / idle, tmux pane), transcripts give the title, last prompt
+# and reply, and hooks add what the files can't tell: finished (Stop), waiting on
+# you (a permission prompt), prompted again (clears the mark), sub-agents done.
+# Without the hooks it still works, just with less detail.
+#
+# Marks: ● finished since you looked, ? waiting on you (also in the status column).
+# Prompting a session clears its mark; its sub-agents stay listed until then.
+#
+# The spark column: activity over the last hour (messages per 5 minutes, blue),
+# then how full the context is (green / yellow / red) and its size in tokens.
+#
+# Config (.sources.agents in panel's config), all optional:
+#   claude_dir       default ~/.claude
+#   context_window   tokens in a full context: a number, or per model
+#                    {"claude-sonnet-5-5": 200000, "*": 1000000} (default 1000000)
+emulate -L zsh
+setopt extendedglob pipefail
+zmodload zsh/datetime
+zmodload -F zsh/stat b:zstat
+path=(/opt/homebrew/bin $path)
+
+cache="${PANEL_SOURCE_CACHE:?run me through panel}"
+conf="$PANEL_SOURCE_CONFIG"
+[[ -n $conf ]] || conf='{}'
+claude_dir="$(jq -r '.claude_dir // empty' <<<"$conf")"
+claude_dir="${${claude_dir:-$HOME/.claude}/#\~/$HOME}"
+state="$cache/state"   # state/<session>/{prompt,stop,waiting,resume,ended,transcript} + sub/<agent>.{start,stop}
+
+mtime() { zstat +mtime $1 2>/dev/null || print 0 }
+num() { [[ -f $1 ]] && head -1 $1 || print 0 }   # first line of a state file (a time), or 0
+
+# A Claude Code transcript (or a sub-agent's) -> the bits shown: title, last
+# prompt and reply, branch, PRs, when it was last prompted or interrupted.
+JQ_TRANSCRIPT='
+  def epoch: if . == null then null else sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601 end;
+  def text: if type == "string" then . else [.[]? | select(.type == "text") | .text] | join("\n") end;
+  # a session: its own entries; a sub-agent: all of them (they are all "sidechain")
+  [inputs | fromjson? | select($sub or .isSidechain != true)] as $e
+  # a prompt you typed: text, not a tool result, not a shell or command echo
+  | [$e[] | select(.type == "user" and .isMeta != true)
+       | (.message.content | text) as $t | select($t != "" and ($t | test("^\\s*<") | not)) | {t: $t, at: (.timestamp | epoch)}] as $prompts
+  | [$e[] | select(.type == "assistant") | (.message.content | text) as $t | select($t != "") | {t: $t, at: (.timestamp | epoch)}] as $replies
+  | { title: ([$e[] | select(.type == "ai-title") | .aiTitle] | last),
+      prompt: ([$e[] | select(.type == "last-prompt") | .lastPrompt] | last // $prompts[-1].t),
+      prompt_at: $prompts[-1].at,
+      first_prompt: $prompts[0].t,
+      reply: ($replies[-1].t // null | if . then .[0:3000] else . end),
+      reply_at: $replies[-1].at,
+      branch: ([$e[] | .gitBranch // empty | select(. != "" and . != "HEAD")] | last),
+      prs: ([$e[] | select(.type == "pr-link") | .prUrl] | unique),
+      tools: ([$e[] | select(.type == "assistant") | .message.content[]? | select(.type == "tool_use") | .name]),
+      interrupt_at: ([$e[] | select(.type == "user") | select(.message.content | text | contains("[Request interrupted by user"))
+                     | .timestamp | epoch] | last) }
+  | .last_tool = .tools[-1] | .tool_count = (.tools | length) | del(.tools)
+  # the newest reply: model and how much context it used
+  | ([$e[] | select(.type == "assistant" and .message.usage != null and .message.model != "<synthetic>")] | last) as $r
+  | .model = $r.message.model
+  | .context = ($r.message.usage | if . then .input_tokens + (.cache_creation_input_tokens // 0)
+                                            + (.cache_read_input_tokens // 0) + (.output_tokens // 0) else null end)
+  | .mode = ([$e[] | select(.type == "permission-mode") | .permissionMode] | last)
+  # message times in the last two hours (the activity spark)
+  | .times = [$e[] | select(.type == "user" or .type == "assistant") | .timestamp | epoch | select(. > now - 7200) | floor]'
+
+# Token use over the whole transcript: one entry per reply (a reply with several
+# parts is written once per part, with the same id and usage).
+JQ_STATS='
+  [inputs | fromjson? | select(.type == "assistant" and ($sub or .isSidechain != true)) | .message
+   | select(.usage != null and .model != "<synthetic>")] | unique_by(.id)
+  | { replies: length,
+      models: (group_by(.model) | map({(.[0].model): length}) | add // {}),
+      input: (map(.usage.input_tokens // 0) | add // 0),
+      output: (map(.usage.output_tokens // 0) | add // 0),
+      thinking: (map(.usage.output_tokens_details.thinking_tokens // 0) | add // 0),
+      cache_read: (map(.usage.cache_read_input_tokens // 0) | add // 0),
+      cache_write: (map(.usage.cache_creation_input_tokens // 0) | add // 0) }'
+
+# info <transcript> <out.json> [sub]: parse the transcript, only when it changed
+info() {
+  local t=$1 out=$2 sub=${3:+true}
+  [[ -f $t ]] || { print '{}' > $out; return }
+  (( $(mtime $out) >= $(mtime $t) )) && [[ -s $out ]] && return
+  if tail -n 3000 $t | jq -nR --argjson sub ${sub:-false} "$JQ_TRANSCRIPT" > $out.tmp 2>/dev/null &&
+     grep -F '"usage":' $t | jq -nR --argjson sub ${sub:-false} "$JQ_STATS" > $out.stats 2>/dev/null &&
+     jq --slurpfile st $out.stats '.stats = $st[0]' $out.tmp > $out.tmp2 2>/dev/null; then
+    mv $out.tmp2 $out
+  else
+    print '{}' > $out
+  fi
+  rm -f $out.tmp $out.tmp2 $out.stats
+}
+
+fetch_active() {
+  local f pid sid st t s tmp now=$EPOCHREALTIME
+  local -a pids alive
+  mkdir -p $cache/info $cache/known $state
+  tmp="$(mktemp -d $cache/.fetch.XXXX)"
+  pids=( $claude_dir/sessions/<->.json(N:t:r) )
+  # alive = the pid is running and is still claude (pids get reused)
+  (( $#pids )) && alive=( ${(f)"$(ps -o pid=,comm= -p ${(j:,:)pids} 2>/dev/null | awk '$2 ~ /claude/ { print $1 }')"} )
+  for pid in $alive; do
+    f=$claude_dir/sessions/$pid.json
+    sid="$(jq -r '.sessionId // empty' $f 2>/dev/null)"
+    [[ -n $sid ]] || continue
+    st=$state/$sid
+    t="$(cat $st/transcript 2>/dev/null)"
+    [[ -f $t ]] || t=( $claude_dir/projects/*/$sid.jsonl(N[1]) )
+    info "$t" $cache/info/$sid.json
+    # sub-agents: those written to since the session was last prompted
+    local turn=$(( $(num $st/prompt) > 0 ? $(num $st/prompt) : 0 ))
+    local p_at="$(jq -r '.prompt_at // 0' $cache/info/$sid.json)"
+    (( p_at > turn )) && turn=$p_at
+    local -a subs=()
+    if [[ -n $t ]]; then
+      for s in ${t%.jsonl}/subagents/agent-*.meta.json(N); do
+        local aid=${${s:t}%.meta.json}; aid=${aid#agent-}
+        local sj=${s%.meta.json}.jsonl
+        local start="$(num $st/sub/$aid.start)" stop="$(num $st/sub/$aid.stop)" m="$(mtime $sj)"
+        (( start > 0 )) || start="$(mtime $s)"
+        (( m >= turn || start >= turn )) || continue
+        info $sj $cache/info/sub-$aid.json sub
+        subs+=( "$(jq -c --arg id $aid --argjson start $start --argjson stop $stop --argjson m $m \
+                      --argjson now $now --argjson hooked "$([[ -f $st/sub/$aid.start ]] && print true || print false)" \
+                      --slurpfile i $cache/info/sub-$aid.json '
+          . + {id: $id, start: $start, mtime: $m, info: $i[0],
+               # done: its stop hook ran, or (no hooks) its transcript went quiet
+               done: ($stop > 0 or ($hooked | not) and ($now - $m > 60)),
+               stop: (if $stop > 0 then $stop elif ($hooked | not) and ($now - $m > 60) then $m else 0 end)}' $s)" )
+      done
+    fi
+    # where it is in tmux, as you'd say it: "x-sls:2 claude"
+    local where="" tpane="$(jq -r '[.tmux // "" | capture("(?<p>%[0-9]+)$").p][0] // empty' $f)"
+    [[ -n $tpane ]] && where="$(tmux display -p -t $tpane '#S:#I #W' 2>/dev/null)"
+    # the hook times; the "attention" time only ever grows (kept in the state)
+    jq -c --arg t "$t" --argjson now $now --arg where "$where" \
+      --argjson prompt "$(num $st/prompt)" --argjson stop "$(num $st/stop)" \
+      --argjson waiting "$(num $st/waiting)" --arg wmsg "$(sed -n 2p $st/waiting 2>/dev/null)" \
+      --argjson resume "$(num $st/resume)" --argjson seen_attn "$(num $st/attention)" \
+      --slurpfile i $cache/info/$sid.json --argjson subs "[${(j:,:)subs}]" '
+      .info = $i[0] | .subs = $subs | .transcript = $t | .where = $where
+      | (.statusUpdatedAt // .updatedAt // 0) / 1000 as $su
+      # waiting on you: a permission prompt after the last prompt / stop / resumed
+      # tool, and not declined since (esc interrupts the turn; no hook says so)
+      | .waiting = ($waiting > ([$prompt, $stop, $resume] | max) and ((.info.interrupt_at // 0) < $waiting))
+      | .wmsg = $wmsg
+      # busy / idle: the newest of the session file and the hooks
+      | ([{s: .status, at: $su}, {s: "busy", at: $prompt}, {s: "idle", at: $stop}] | max_by(.at)) as $now_st
+      | .state = (if .waiting then "?" else $now_st.s end)
+      | .state_at = (if .waiting then $waiting else $now_st.at end)
+      | .attention = ([$seen_attn, $stop, $waiting, (if .state == "idle" then (.info.reply_at // 0) else 0 end)] | max)' $f > $tmp/$sid.json || continue
+    jq -r '.attention' $tmp/$sid.json > $st.attention.tmp 2>/dev/null
+    mkdir -p $st && mv $st.attention.tmp $st/attention
+    # last known state, kept after the session ends (to show / resume later)
+    jq -c '{sessionId, name, cwd, tmux, pid, startedAt, version, transcript, title: .info.title,
+            prompt: .info.prompt, branch: .info.branch, state, state_at, ended_at: null}' $tmp/$sid.json > $cache/known/$sid.json
+  done
+  # sessions that ended: note when, once
+  for f in $cache/known/*.json(N); do
+    [[ -f $tmp/${f:t} ]] && continue
+    jq -e '.ended_at == null' $f >/dev/null 2>&1 || continue
+    jq -c --argjson t "$(( $(num $state/${f:t:r}/ended) > 0 ? $(num $state/${f:t:r}/ended) : $EPOCHSECONDS ))" '.ended_at = $t' $f > $f.tmp && mv $f.tmp $f
+  done
+  jq -s -c . $tmp/*.json(N) > $cache/.sessions.json && mv $cache/.sessions.json $cache/sessions.json
+  [[ -s $cache/sessions.json ]] || print '[]' > $cache/sessions.json
+  rm -rf $tmp
+  jq --argjson now $EPOCHSECONDS --argjson cw "$(jq -c '.context_window // 1000000' <<<"$conf")" '
+    def window($m): if ($cw | type) == "object" then ($cw[$m] // $cw["*"] // 1000000) else $cw end;
+    # activity: messages per 5 minutes over the last hour, one bar each (log scale)
+    def activity: (.times // []) as $t
+      | [range(12; 0; -1) | ($now - . * 300) as $from | [$t[] | select(. >= $from and . < $from + 300)] | length]
+      | {s: map(if . == 0 then "▁" else "▁▂▃▄▅▆▇█"[[(log2 | floor), 7] | min:][0:1] end) | join(""),
+         c: map(if . == 0 then "d" else "b" end) | join("")};
+    # context: 5 cells in eighths, coloured by how full, then the size (351k)
+    def gauge: if .context == null then {s: " " * 10, c: " " * 10} else
+      ([.context / window(.model), 1] | min) as $f | ($f * 40 | floor) as $e
+      | (if $f < 0.5 then "g" elif $f < 0.8 then "y" else "r" end) as $col
+      | [range(5) | ([[$e - . * 8, 0] | max, 8] | min)] as $cells
+      | (.context | if . >= 999500 then "\(. / 100000 | round / 10)M" else "\(. / 1000 | round)k" end) as $n
+      | {s: ($cells | map(if . == 0 then "·" else "▏▎▍▌▋▊▉█"[. - 1:.] end) | join("")) + " " + (" " * (4 - ($n | length))) + $n,
+         c: ($cells | map(if . == 0 then "d" else $col end) | join("")) + " " + ("d" * 4)} end;
+    def sparks: (.info | activity) as $a | (.info | gauge) as $g
+      | {spark: ($a.s + " " + $g.s), spark_colors: ($a.c + " " + $g.c)};
+    def tmux_session: (.tmux // "") | split(":")[0] // "";
+    # the pane id, or null outside tmux (capture alone would give nothing, dropping the row)
+    def pane: [(.tmux // "") | capture("(?<p>%[0-9]+)$").p][0];
+    # stable order: waiting on you first, then by tmux session and name
+    sort_by((.state != "?"), (tmux_session | if . == "" then "~" else . end), .name)
+    | map( . as $s
+      | { id: .sessionId, kind: "claude",
+          key: (tmux_session | if . == "" then "·" else . end),
+          status: (if .state == "?" then "? waiting" else .state end),
+          at: (.state_at | floor),
+          updated: (.attention | floor),
+          quiet_before: ((.startedAt // 0) / 1000 | floor),
+          status_color: ({"?": "r", "busy": "g"}[.state] // null),
+          mark: (if .state == "?" then "?" else "●" end),
+          mark_color: (if .state == "?" then "r" else "o" end),
+          title: (.name + (if .info.title then "  \u001b[2m" + .info.title + "\u001b[0m" else "" end)),
+          url: (pane as $p | if $p then "tmux:" + $p else null end) } + sparks,
+        ( .subs | sort_by(.start)[]
+          | { id: "sub:\(.id)", kind: "claude",
+              key: "  └ \(.agentType // "agent")",
+              status: (if .done then "done" else "running" end),
+              status_color: (if .done then null else "g" end),
+              at: ((if .done then .stop else .start end) | floor),
+              updated: (.stop | floor),
+              quiet_before: (.start | floor),
+              mark: "●", mark_color: "o",
+              title: (.description // .info.first_prompt // "" | split("\n")[0]),
+              url: ($s | pane as $p | if $p then "tmux:" + $p else null end) } + sparks ) )' $cache/sessions.json
+}
+
+preview() {
+  [[ -f $cache/sessions.json ]] || { print "Nothing cached yet: it arrives with the next fetch."; return }
+  jq -r --arg id "$1" --argjson now $EPOCHSECONDS --argjson cw "$(jq -c '.context_window // 1000000' <<<"$conf")" '
+    def ago: ($now - .) as $s | if $s < 60 then "just now" elif $s < 3600 then "\($s / 60 | floor)m ago"
+             elif $s < 86400 then "\($s / 3600 | floor)h \($s % 3600 / 60 | floor)m ago" else "\($s / 86400 | floor)d ago" end;
+    def hm: strflocaltime("%H:%M");
+    def quote: split("\n") | map("> " + .) | join("\n");
+    def k: if . == null then "?" elif . >= 1000000 then "\(. / 100000 | round / 10)M" elif . >= 1000 then "\(. / 1000 | round)k" else tostring end;
+    def window($m): if ($cw | type) == "object" then ($cw[$m] // $cw["*"] // 1000000) else $cw end;
+    # model and token use, from an info object
+    def model: . as $i | "## Model\n",
+      "- **\($i.model // "?")**\(if ($i.stats.models // {} | length) > 1
+           then "  (also " + ($i.stats.models | to_entries | map(select(.key != $i.model) | "\(.key) ×\(.value)") | join(", ")) + ")" else "" end)",
+      ( $i.context // empty | "- Context: **\(k)** of \(window($i.model) | k) (\(. * 100 / window($i.model) | floor)%)" ),
+      ( $i.stats // empty | select(.replies > 0)
+        | "- \(.replies) replies: \(.output | k) tokens out (\(.thinking | k) thinking), \(.input + .cache_read + .cache_write | k) in"
+          + " (\(.cache_read | k) from cache, \(.cache_write | k) cached)" ),
+      ( $i.mode // empty | select(. != "default") | "- Permission mode: **\(.)**" ),
+      "";
+    def tools: if .tool_count > 0 then "\(.tool_count) tool calls, last: `\(.last_tool)`" else "no tool calls" end;
+    if ($id | startswith("sub:")) then
+      ($id[4:]) as $aid
+      | ([.[] | . as $s | .subs[] | select(.id == $aid) | . + {parent: $s}] | first) as $a
+      | if $a == null then "This sub-agent is no longer listed." else
+        "# \($a.agentType // "agent")\n",
+        "**\(if $a.done then "done" else "running" end)**, started \($a.start | hm)\(if $a.done then ", finished \($a.stop | hm)" else "" end)  ",
+        "Session: \($a.parent.name)\(if $a.requestShape then "  ·  \($a.requestShape)" else "" end)\(if ($a.spawnDepth // 1) > 1 then "  ·  depth \($a.spawnDepth)" else "" end)  ",
+        "\($a.info | tools)\n",
+        ( $a.description // empty | "## Task\n", ., "" ),
+        ( $a.info.reply // empty | "## \(if $a.done then "Result" else "Latest" end)\n", ., "" ),
+        ( $a.info | model )
+      end
+    else
+      (map(select(.sessionId == $id)) | first) as $s
+      | if $s == null then "This session is no longer running." else
+        "# \($s.name)\n",
+        ( $s.info.title // empty | "_\(.)_\n" ),
+        "**\({"?": "waiting on you", "busy": "busy", "idle": "idle"}[$s.state] // $s.state)** since \($s.state_at | hm) (\($s.state_at | ago))  ",
+        ( if $s.state == "?" and $s.wmsg != "" then "\($s.wmsg)  " else empty end ),
+        "tmux: \(if $s.where != "" then $s.where elif $s.tmux then $s.tmux + " (gone)" else "not in tmux" end)  ",
+        "Folder: `\($s.cwd)`\(if $s.info.branch then "  ·  branch `\($s.info.branch)`" else "" end)  ",
+        "Started \($s.startedAt / 1000 | ago)  ·  Claude Code \($s.version // "?")  ·  pid \($s.pid)  ",
+        ( $s.info.prs // [] | select(length > 0) | "PRs: " + (map("[\(split("/") | "\(.[-3])#\(.[-1])")](\(.))") | join(", ")) + "  " ),
+        "",
+        ( $s.info.prompt // empty | "## Last prompt\n", quote, "" ),
+        ( $s.info.reply // empty | "## Last reply\n", ., "" ),
+        ( $s.subs | select(length > 0)
+          | "## Sub-agents (this turn)\n",
+            (sort_by(.start)[] | "- \(if .done then "✓" else "…" end) **\(.agentType // "agent")**  \(.description // "")"),
+            "" ),
+        ( $s.info | model )
+      end
+    end' $cache/sessions.json
+}
+
+search() {
+  [[ -f $cache/sessions.json ]] || return 0
+  jq -r --arg q "$1" '
+    ($q | ascii_downcase | split(" ") | map(select(. != ""))) as $words
+    | .[] | ([.name, .info.title, .cwd, .info.branch, .info.prompt, .info.reply, (.subs[]? | .description)]
+             | map(select(. != null)) | join("  ") | gsub("\\s+"; " ")) as $text
+    | ($text | ascii_downcase) as $low
+    | select(all($words[]; . as $w | $low | contains($w)))
+    | ($low | index($words[0])) as $i | ([$i - 40, 0] | max) as $from
+    | [.sessionId, ($text[$from:$i + 70] | if $from > 0 then sub("^\\S*\\s"; "") else . end | gsub("\\t"; " "))] | @tsv' $cache/sessions.json
+}
+
+# A hook payload on stdin. Times come from panel (PANEL_EVENT_AT, taken when the
+# hook started), so events handled out of order still compare right.
+event() {
+  local input="$(cat)" at=${PANEL_EVENT_AT:-$EPOCHREALTIME} ev sid tp ntype msg aid st
+  # one field per line (a tab-separated read would merge empty fields)
+  local -a f=( "${(@f)$(jq -r '[.hook_event_name, .session_id, .transcript_path, .notification_type, .agent_id]
+      | map(. // "" | tostring | gsub("\n"; " ")) | .[]' <<<"$input" 2>/dev/null)}" )
+  ev=$f[1] sid=$f[2] tp=$f[3] ntype=$f[4] aid=$f[5]
+  [[ -n $ev && -n $sid && $sid != */* ]] || return 1
+  st=$state/$sid
+  mkdir -p $st/sub
+  [[ -n $tp && ! -f $st/transcript ]] && print -r -- $tp > $st/transcript
+  local last="$(( $(num $st/prompt) > $(num $st/stop) ? $(num $st/prompt) : $(num $st/stop) ))"
+  case $ev in
+    UserPromptSubmit) print $at > $st/prompt; print -r -- $sid ;;   # clears the mark
+    Stop|StopFailure) print $at > $st/stop ;;
+    Notification)
+      case $ntype in
+        (permission_prompt|elicitation_dialog|elicitation_url_dialog|agent_needs_input)
+          msg="$(jq -r '.message // ""' <<<"$input" | head -1)"
+          print -l $at "$msg" > $st/waiting ;;
+        (*) return 1 ;;   # idle reminders and the like: nothing new
+      esac ;;
+    PostToolUse|PostToolUseFailure)   # work goes on: only matters after a permission prompt
+      (( $(num $st/waiting) > last && $(num $st/waiting) > $(num $st/resume) )) || return 1
+      print $at > $st/resume ;;
+    SubagentStart) [[ -n $aid ]] || return 1; print $at > $st/sub/$aid.start ;;
+    SubagentStop)  [[ -n $aid ]] || return 1; print $at > $st/sub/$aid.stop ;;
+    SessionStart)  : ;;   # so a new session shows up right away
+    SessionEnd)    print $at > $st/ended ;;
+    (*) return 1 ;;
+  esac
+  return 0
+}
+
+case $1 in
+  fetch)
+    case $2 in
+      active|"") fetch_active ;;
+      *) print -u2 "agents: unknown query '$2' (try: active)"; exit 1 ;;
+    esac ;;
+  preview) preview "$2" ;;
+  search)  search "$2" ;;
+  event)   event ;;
+  *) print -u2 "usage: agents fetch active | agents preview <id> | agents search <words> | agents event < hook.json"; exit 1 ;;
+esac

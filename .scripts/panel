@@ -5,6 +5,8 @@
 #   panel fetch [pane...]   fetch now (every pane in the config if none given)
 #   panel fetcher [layout]  loop: fetch each pane of the layout when it's due
 #   panel view <pane>       the fzf list for one pane (what each tmux pane runs)
+#   panel event <source>    hand an event (stdin) to a source, then refresh its panes:
+#                           for pushes such as Claude Code hooks (always exits 0, silently)
 #
 # Everything shown is read from the cache (~/.cache/panel); only fetching talks
 # to the outside world.
@@ -38,10 +40,20 @@
 #                            letter per character: g(reen) r(ed) y(ellow) b(lue) d(im)).
 #                            $PANEL_SOURCE_CACHE is theirs to keep more in; $PANEL_SINCE
 #                            is the last good fetch (epoch).
+#                            Also optional: mark (the glyph instead of ● / ◆) and
+#                            mark_color (one letter, as spark_colors, plus o(range));
+#                            status_color: the status in that colour (else dim);
+#                            quiet_before: an item you've never looked at counts as
+#                            seen at this time, so it's only marked after a change.
 #   <source> preview <id>    print the preview of one item as Markdown, from the cache
 #                            only (panel renders it with glow)
 #   <source> search <words>  optional: "<id>\t<snippet>" for each cached item whose
 #                            content has all the words (used by alt-f)
+#   <source> event           optional: an event on stdin (panel event); exit 0 when
+#                            something changed (the source's panes are fetched again),
+#                            printing the ids of items to mark seen
+#
+# Items whose url is "tmux:<target>" (e.g. tmux:%33) open by switching tmux there.
 #
 # In a pane: an item is marked seen after the cursor rests on it (seen_after);
 # ● new, ◆ changed since you saw it.
@@ -225,13 +237,34 @@ fetcher() {
   done
 }
 
+# event <source>: a push (hook payload on stdin) for a source. The source records
+# it; when something changed, fetch the source's panes that are open, mark what it
+# says as seen, and the views reload. Never fails or prints: hooks call it.
+event() {
+  local source=$1 input ids pane unit try
+  input="$(cat)"
+  export PANEL_EVENT_AT=$EPOCHREALTIME
+  ids="$(print -r -- $input | run_source $source event 2>/dev/null)" || return 0
+  for pane in ${(f)"$(conf --arg s $source '.panes | to_entries[] | select(.value.source == $s) | .key' 2>/dev/null)"}; do
+    for unit in ${(f)"$(pane_units $pane)"}; do
+      # only panes someone is looking at; the fetcher keeps the rest up to date
+      local -a socks=( "$PANEL_CACHE/panes/$pane"/fzf.*.sock(N=) )
+      if (( $#socks )); then
+        for try in {1..20}; do fetch_pane $unit && break; (( $? == 2 )) || break; sleep 0.25; done
+      fi
+      [[ -n $ids && -f "$PANEL_CACHE/panes/$unit/items.json" ]] && mark_seen $unit ${(f)ids} && notify $unit
+    done
+  done
+  return 0
+}
+
 # --- seen -----------------------------------------------------------------------
 # seen.json: {"<source>:<id>": <updated when you saw it>}. Global, no content.
 SEEN="$PANEL_CACHE/seen.json"
 seen_json() { [[ -s $SEEN ]] && cat $SEEN || print '{}' }
 
 # Shared by the list and the counts: is this item new / changed / seen?
-JQ_STATE='def state($seen; $src): $seen["\($src):\(.seen // .id)"] as $s
+JQ_STATE='def state($seen; $src): ($seen["\($src):\(.seen // .id)"] // .quiet_before) as $s
   | if $s == null then "new" elif (.updated // 0) > $s then "changed" else "seen" end;'
 
 # seen_update <pane> <jq filter over $ids/$items>: change seen.json under a lock
@@ -338,10 +371,11 @@ lines() {   # lines <pane> <pid>
     ([.[] | .key // .id | length] | max // 0 | if . > 30 then 30 else . end) as $w |
     # spark column: as wide as the longest strip (right-aligned: newest on the right)
     ([.[] | .spark // "" | length] | max // 0 | if . > 24 then 24 else . end) as $kw |
+    {"g": "166;227;161", "r": "243;139;168", "y": "249;226;175", "b": "137;180;250", "d": "108;112;134", "o": "250;179;135"} as $palette |
     def spark: (.spark // "" | .[-$kw:]) as $s | (.spark_colors // "" | .[-($s | length):]) as $c
       | (" " * ($kw - ($s | length)))
         + ([range(0; $s | length)] | map(
-            {"g": "166;227;161", "r": "243;139;168", "y": "249;226;175", "b": "137;180;250", "d": "108;112;134"}[$c[.:.+1]] as $rgb
+            $palette[$c[.:.+1]] as $rgb
             | (if $rgb then rgb($rgb) else "" end) + $s[.:.+1] + $off) | join(""));
     # status column: as wide as the longest status, between 16 and 24
     ([.[] | .status // "" | length] | max // 0 | [., 15] | max | [., 23] | min) as $sw |
@@ -351,9 +385,9 @@ lines() {   # lines <pane> <pid>
       + if $m.error then rgb("243;139;168") + "fetch failed at \($m.fetched_at | hm): \($m.error | split("\n")[0])  ·  showing \($m.ok_at | hm)" + $off
              else $dim + "fetched \($m.ok_at | hm)  ·  \(length) items  ·  ● new  ◆ changed" + $off end ),
     ( .[] | state($seen; $src) as $st
-      | (if $st == "new" then rgb("250;179;135") + "●" + $off
-         elif $st == "changed" then rgb("249;226;175") + "◆" + $off else " " end) as $mark
-      | "\(.id)\t\($mark) \(if $w > 0 then $bold + (.key // .id | pad($w + 2)) + $off + " " else "" end)\($dim)\(.status // "" | pad($sw + 1)) \(.at // .updated | age | pad(7))\($off) \(if $kw > 0 then spark + "  " else "" end)\(.title // "" | sub("^\\s+"; ""))" )
+      | ($palette[.mark_color // ""] // (if $st == "new" then $palette.o else $palette.y end)) as $mc
+      | (if $st == "seen" then " " else rgb($mc) + (.mark // (if $st == "new" then "●" else "◆" end)) + $off end) as $mark
+      | "\(.id)\t\($mark) \(if $w > 0 then $bold + (.key // .id | pad($w + 2)) + $off + " " else "" end)\(if $palette[.status_color // ""] then $off + rgb($palette[.status_color]) else $dim end)\(.status // "" | pad($sw + 1))\($off)\($dim) \(.at // .updated | age | pad(7))\($off) \(if $kw > 0 then spark + "  " else "" end)\(.title // "" | sub("^\\s+"; ""))" )
   ' $dir/items.json
   update_window_name
 }
@@ -431,7 +465,11 @@ find_words() { print -r -- "$3" > "$PANEL_CACHE/panes/$1/find.$2"; lines $1 $2 }
 
 open_url() {   # open_url <unit> <id>
   local url="$(jq -r --arg id $2 '.[] | select(.id == $id) | .url // empty' "$PANEL_CACHE/panes/$1/items.json")"
-  [[ -n $url ]] && open "$url"
+  case $url in
+    ("") return 0 ;;
+    (tmux:*) tmux switch-client -t "${url#tmux:}" 2>/dev/null ;;
+    (*) open "$url" ;;
+  esac
 }
 
 view() {
@@ -507,6 +545,7 @@ case $1 in
              done ;;
   fetcher)   fetcher $2 ;;
   view)      [[ -n $2 ]] || die "usage: panel view <pane>"; view $2 ;;
+  event)     [[ -n $2 ]] && event $2 </dev/stdin >/dev/null 2>&1; exit 0 ;;
   _lines)    lines $2 $3 ;;
   _prompt)   prompt $2 $3 ;;
   _toggle_find) toggle_find $2 $3 ;;

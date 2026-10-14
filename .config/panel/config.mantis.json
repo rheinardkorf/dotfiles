@@ -46,6 +46,16 @@
       "every": "15m"
     },
 
+    // running agents (Claude Code sessions) and this turn's sub-agents, all local;
+    // hooks in ~/.claude/settings.json (panel event agents) push changes in.
+    // ctrl-o jumps to the agent's tmux pane
+    "agents": {
+      "title": "Agents",
+      "source": "agents",
+      "query": "active",
+      "every": "15s"
+    },
+
     // AWS prod, one pane with views (tab switches): alarms, CloudFormation stacks, DynamoDB tables, SQS queues
     "aws": {
       "title": "Prod",
@@ -60,7 +70,8 @@
       "jira": ["jira"],
       "github": ["github"],
       "aws": ["aws"],
-      "calendar": ["calendar"]
+      "calendar": ["calendar"],
+      "agents": ["agents"]
     }
   }
 }
