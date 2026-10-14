@@ -1,4 +1,6 @@
 {
+  // Copy to config.<machine>.json (name in ~/.config/machine-name). Anything
+  // that shouldn't be public goes in config.local.json, merged on top.
   // An item counts as seen after the cursor rests on it this long
   "seen_after": "2s",
 
@@ -9,13 +11,27 @@
       "source": "jira",
       "query": "assignee = currentUser() AND statusCategory != Done ORDER BY updated DESC",
       "every": "2m"
+    },
+    // GitHub search syntax; gh does the fetching
+    "review-requests": {
+      "title": "Reviews for me",
+      "source": "github",
+      "query": "is:open is:pr review-requested:@me archived:false sort:updated-desc",
+      "every": "2m"
+    },
+    "my-prs": {
+      "title": "My PRs",
+      "source": "github",
+      "query": "is:open is:pr author:@me archived:false sort:updated-desc",
+      "every": "2m"
     }
   },
 
   // A layout is a tmux session: one window per context, one pane per entry
   "layouts": {
     "work": {
-      "me": ["my-tickets"]
+      "jira": ["my-tickets"],
+      "github": ["review-requests", "my-prs"]
     }
   },
 

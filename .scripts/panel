@@ -9,7 +9,11 @@
 # Everything shown is read from the cache (~/.cache/panel); only fetching talks
 # to the outside world.
 #
-# Config: ~/.config/panel/config.json (JSON; full-line // comments allowed).
+# Config, per machine (name from ~/.config/machine-name, or $PANEL_MACHINE):
+#   ~/.config/panel/config.<machine>.json   committed: this machine's panes and layouts
+#   ~/.config/panel/config.local.json       optional, not committed: merged on top, for
+#                                           anything that shouldn't be public
+# JSON, with full-line // comments allowed. Keys:
 #   panes    {name: {source, query, every, title}}    every: 30s / 2m / 1h
 #   layouts  {name: {window: [pane, ...]}}            one tmux window per context
 #   sources  {name: {...}}                            handed to the source script
@@ -18,9 +22,10 @@
 #                                                     (default: glow's own, from glow.yml)
 #
 # Sources are scripts in ~/.config/panel/sources/<name>:
-#   <source> fetch <query>   print the items as JSON: [{id, title, status, updated, url}]
-#                            (updated in epoch seconds). $PANEL_SOURCE_CACHE is theirs to
-#                            keep more in; $PANEL_SINCE is the last good fetch (epoch).
+#   <source> fetch <query>   print the items as JSON: [{id, title, status, updated, url, key?}]
+#                            (updated in epoch seconds; key: a shorter id for the list).
+#                            $PANEL_SOURCE_CACHE is theirs to keep more in; $PANEL_SINCE
+#                            is the last good fetch (epoch).
 #   <source> preview <id>    print the preview of one item as Markdown, from the cache
 #                            only (panel renders it with glow)
 #
@@ -41,10 +46,18 @@ self="${0:A}"
 
 die() { print -u2 "panel: $*"; exit 1 }
 
-# conf [jq args...]: query the config, with // comment lines stripped
+# conf [jq args...]: query the config: this machine's file with config.local.json
+# merged on top (objects merge, everything else is replaced), // comment lines stripped
 conf() {
-  [[ -f $PANEL_CONFIG_DIR/config.json ]] || die "no config: $PANEL_CONFIG_DIR/config.json"
-  sed -E '/^[[:space:]]*\/\//d' "$PANEL_CONFIG_DIR/config.json" | jq -r "$@"
+  local name_file="${XDG_CONFIG_HOME:-$HOME/.config}/machine-name" machine=$PANEL_MACHINE f
+  [[ -n $machine || ! -r $name_file ]] || machine="$(<$name_file)"
+  machine=${machine//[[:space:]]/}
+  [[ -n $machine ]] || die "no machine name: put one in $name_file (or set PANEL_MACHINE)"
+  f="$PANEL_CONFIG_DIR/config.$machine.json"
+  [[ -f $f ]] || die "no config for \"$machine\": $f (see config.example.json)"
+  for f in $f $PANEL_CONFIG_DIR/config.local.json(N); do
+    sed -E '/^[[:space:]]*\/\//d' $f
+  done | jq -s 'reduce .[] as $c ({}; . * $c)' | jq -r "$@"
 }
 
 seconds() {   # 30s / 2m / 1h -> seconds
@@ -68,11 +81,14 @@ run_source() {
     "$PANEL_CONFIG_DIR/sources/$source" "$@"
 }
 
-# Tell a pane's fzf to re-read the cache (if it's open).
+# Tell every open view of a pane to re-read the cache. Each view has its own
+# socket (fzf.<pid>.sock); one that doesn't answer is left over, so remove it.
 notify() {
-  local sock="$PANEL_CACHE/panes/$1/fzf.sock"
-  [[ -S $sock ]] && curl -s -m 2 --unix-socket "$sock" -X POST http://localhost \
-    -d "reload($self _lines $1)" >/dev/null 2>&1
+  local sock
+  for sock in "$PANEL_CACHE/panes/$1"/fzf.*.sock(N=); do
+    curl -s -m 2 --unix-socket "$sock" -X POST http://localhost \
+      -d "reload($self _lines $1)" >/dev/null 2>&1 || rm -f "$sock"
+  done
   return 0
 }
 
@@ -160,6 +176,9 @@ on_focus() {
   {
     sleep $delay
     [[ "$(<$dir/focus)" == "$id $token" ]] || exit 0
+    # only while you're looking: the active pane of the shown window, on screen
+    [[ -z $TMUX_PANE || "$(tmux display -p -t $TMUX_PANE \
+      '#{&&:#{pane_active},#{&&:#{window_active},#{session_attached}}}')" == 1 ]] || exit 0
     mark_seen $pane $id && notify $pane
   } </dev/null >/dev/null 2>&1 &!
 }
@@ -198,12 +217,13 @@ lines() {
     def pad($n): if length >= $n then .[0:$n - 1] + "…" else . + (" " * ($n - length)) end;
     def rgb($c): "\u001b[38;2;\($c)m";
     "\u001b[2m" as $dim | "\u001b[1m" as $bold | "\u001b[0m" as $off |
+    ((([.[] | .key // .id | length] | max // 8) | if . > 30 then 30 else . end) + 2) as $w |
     ( "\t" + if $m.error then rgb("243;139;168") + "fetch failed at \($m.fetched_at | hm): \($m.error | split("\n")[0])  ·  showing \($m.ok_at | hm)" + $off
              else $dim + "fetched \($m.ok_at | hm)  ·  \(length) items  ·  ● new  ◆ changed" + $off end ),
     ( .[] | state($seen; $src) as $st
       | (if $st == "new" then rgb("250;179;135") + "●" + $off
          elif $st == "changed" then rgb("249;226;175") + "◆" + $off else " " end) as $mark
-      | "\(.id)\t\($mark) \($bold)\(.id | pad(11))\($off) \($dim)\(.status // "" | pad(16)) \(.updated | age | pad(5))\($off) \(.title // "")" )
+      | "\(.id)\t\($mark) \($bold)\(.key // .id | pad($w))\($off) \($dim)\(.status // "" | pad(16)) \(.updated | age | pad(5))\($off) \(.title // "")" )
   ' $dir/items.json
   update_window_name
 }
@@ -242,9 +262,11 @@ view() {
   local pane=$1 dir="$PANEL_CACHE/panes/$1" sock title
   [[ -n "$(pane_source $pane)" ]] || die "unknown pane: $pane"
   mkdir -p $dir
-  sock=$dir/fzf.sock
+  sock=$dir/fzf.$$.sock   # this view's own: a pane can be open more than once
   title="$(conf --arg p $pane '.panes[$p].title // $p')"
   [[ -n $TMUX_PANE ]] && tmux set-option -p -t $TMUX_PANE @panel_pane $pane
+  trap "rm -f $sock" EXIT
+  trap 'exit 0' HUP TERM
   # ctrl-c ends fzf and it starts again; close the pane with tmux (prefix x).
   while :; do
     rm -f $sock
@@ -285,6 +307,9 @@ up() {
   fi
   if [[ -n $TMUX ]]; then tmux switch-client -t "=$SESSION"; else tmux attach -t "=$SESSION"; fi
 }
+
+# Commands you run: stop at a missing config, before anything else complains
+[[ $1 == (up|fetch|fetcher|view) ]] && conf empty
 
 case $1 in
   up)        up $2 ;;

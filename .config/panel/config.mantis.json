@@ -1,0 +1,36 @@
+{
+  // mantis (work). Committed, so public: anything sensitive goes in
+  // config.local.json (not committed), which is merged on top.
+  "seen_after": "2s",
+
+  "panes": {
+    // everything open that's mine, newest activity first
+    "my-tickets": {
+      "title": "My tickets",
+      "source": "jira",
+      "query": "assignee = currentUser() AND statusCategory != Done ORDER BY updated DESC",
+      "every": "2m"
+    },
+
+    // GitHub: everything I can see, no org limit
+    "review-requests": {
+      "title": "Reviews for me",
+      "source": "github",
+      "query": "is:open is:pr review-requested:@me archived:false sort:updated-desc",
+      "every": "2m"
+    },
+    "my-prs": {
+      "title": "My PRs",
+      "source": "github",
+      "query": "is:open is:pr author:@me archived:false sort:updated-desc",
+      "every": "2m"
+    }
+  },
+
+  "layouts": {
+    "work": {
+      "jira": ["my-tickets"],
+      "github": ["review-requests", "my-prs"]
+    }
+  }
+}

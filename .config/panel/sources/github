@@ -1,0 +1,105 @@
+#!/usr/bin/env zsh
+# panel source: GitHub pull requests, through gh (log in once: gh auth login).
+#
+#   github fetch <query>   search PRs (GitHub search syntax, e.g. "is:open is:pr
+#                          review-requested:@me"), and refresh the cached details
+#                          (description, reviews, comments, checks) of changed ones
+#   github preview <id>    the PR as Markdown, from the cache
+emulate -L zsh
+setopt extendedglob pipefail
+path=(/opt/homebrew/bin $path)
+
+cache="${PANEL_SOURCE_CACHE:?run me through panel}"
+items="$cache/items"
+FIELDS=number,title,body,author,state,isDraft,reviewDecision,headRefName,baseRefName,additions,deletions,changedFiles,comments,reviews,statusCheckRollup,url,updatedAt,createdAt,labels,mergeable,reviewRequests
+
+# owner/repo#123 -> a file name
+file() { print -r -- "$items/${${1//\//__}//\#/-}.json" }
+
+fetch() {
+  local list id url updated f
+  local -a need files
+  mkdir -p $items
+  list="$(gh search prs ${(z)1} --limit 200 --json number,title,repository,url,updatedAt,isDraft)" ||
+    { print -u2 -r -- "$list"; return 1 }
+
+  # Details: new PRs and ones updated since they were cached.
+  for id url updated in ${(f)"$(jq -r '.[] | "\(.repository.nameWithOwner)#\(.number)\n\(.url)\n\(.updatedAt)"' <<<"$list")"}; do
+    f="$(file $id)"
+    if [[ -f $f && "$(jq -r .updatedAt $f)" == $updated ]]; then
+      touch $f   # still listed: keep it from being pruned
+    else
+      need+=("$url" "$f")
+    fi
+  done
+  if (( $#need )); then
+    print -rl -- $need | xargs -P 4 -n 2 zsh -c '
+      tmp="$(mktemp "$2.XXXX")"
+      if gh pr view "$1" --json "$0" > "$tmp" 2>/dev/null && jq -e .number "$tmp" >/dev/null 2>&1; then
+        mv "$tmp" "$2"
+      else rm -f "$tmp"; print -u2 "no details for $1"; fi' $FIELDS
+  fi
+  find $items -name '*.json' -mtime +14 -delete 2>/dev/null
+
+  files=( ${(f)"$(jq -r '.[] | "\(.repository.nameWithOwner)#\(.number)"' <<<"$list" | while read -r id; do file $id; done)"} )
+  files=( ${^files}(N) )
+  jq --slurpfile d <( (( $#files )) && jq -c '{key: .url, value: .}' $files || true ) '
+    ($d | from_entries) as $details
+    | map(($details[.url] // {}) as $x
+      | ([$x.statusCheckRollup[]? | (.conclusion // .state // "") | ascii_upcase]
+         | any(. == "FAILURE" or . == "ERROR" or . == "TIMED_OUT" or . == "CANCELLED")) as $failing
+      | { id: "\(.repository.nameWithOwner)#\(.number)",
+          key: "\(.repository.name)#\(.number)",
+          title: .title,
+          status: ((if .isDraft then "draft"
+                    else {"APPROVED": "approved", "CHANGES_REQUESTED": "changes", "REVIEW_REQUIRED": "needs review"}[$x.reviewDecision // ""] // "open"
+                    end) + (if $failing then " ✗" else "" end)),
+          updated: (.updatedAt | fromdateiso8601),
+          url: .url })' <<<"$list"
+}
+
+preview() {
+  local f="$(file $1)"
+  if [[ ! -f $f ]]; then
+    print "No details cached for **$1** yet: they arrive with the next fetch."
+    return
+  fi
+  jq -r '
+    def when: if . == null then "?" else fromdateiso8601 | strflocaltime("%a %-d %b %H:%M") end;
+    # their headings sit under ours: # -> ###
+    def demote: gsub("(?m)^(?<h>#{1,4}) "; "##\(.h) ");
+    def text: if (. // "") | test("\\S") then demote | sub("\\s+$"; "") else "*(no comment)*" end;
+    def review: {"APPROVED": "**approved**", "CHANGES_REQUESTED": "**changes requested**",
+                 "COMMENTED": "commented", "DISMISSED": "dismissed"}[.] // (. // "" | ascii_downcase);
+
+    ([.statusCheckRollup[]? | (.conclusion // .state // "") | ascii_upcase | if . == "" then "PENDING" else . end]
+      | group_by(.) | map("\(length) \(.[0] | ascii_downcase)") | join(" · ")) as $checks
+    | ((.url | capture("github.com/(?<r>[^/]+/[^/]+)/").r) // "") as $repo
+    | "# \($repo | split("/")[1])#\(.number)  \(.title)\n",
+      "**\(if .isDraft then "Draft" else {"APPROVED": "Approved", "CHANGES_REQUESTED": "Changes requested", "REVIEW_REQUIRED": "Needs review"}[.reviewDecision // ""] // "Open" end)**"
+        + "  ·  by \(.author.login)  ·  `\(.headRefName)` → `\(.baseRefName)`"
+        + "  ·  +\(.additions) −\(.deletions) in \(.changedFiles) files  ",
+      "Checks: \(if $checks == "" then "none" else $checks end)  ·  \(.mergeable | ascii_downcase)  ",
+      (if (.reviewRequests | length) > 0 then "Review requested from \([.reviewRequests[] | .login // .name] | join(", "))  " else empty end),
+      (if (.labels | length) > 0 then "Labels: \([.labels[].name | "`\(.)`"] | join(" "))  " else empty end),
+      "\($repo)  ·  opened \(.createdAt | when)  ·  updated \(.updatedAt | when)\n",
+
+      "## Description\n", (.body | text), "",
+
+      ( ( [ (.comments[]? | {who: .author.login, at: .createdAt, what: "", body}),
+            (.reviews[]? | {who: .author.login, at: .submittedAt, what: (.state | review), body}) ]
+          | sort_by(.at) | reverse ) as $every
+        # reviews with no text are replies made inline on the code (not fetched)
+        | [$every[] | select(.what != "commented" or ((.body // "") | test("\\S")))] as $all
+        | ($every | length) - ($all | length) as $inline
+        | "## Reviews and comments (\($all | length))\(if ($all | length) > 1 then "  ·  newest first" else "" end)\n",
+          (if $inline > 0 then "*\($inline) more with inline code comments only (open the PR to see them)*\n" else empty end),
+          ( $all[] | "### \(.who)  ·  \(.at | when)\(if .what != "" then "  ·  \(.what)" else "" end)\n", (.body | text), "" ) )
+  ' $f
+}
+
+case $1 in
+  fetch)   fetch "$2" ;;
+  preview) preview "$2" ;;
+  *)       print -u2 "usage: github fetch <query> | github preview <owner/repo#number>"; exit 1 ;;
+esac

@@ -93,8 +93,8 @@
 .config/nushell/history.*
 !.config/panel/
 !.config/panel/**
-# ...but not the local config (work queries and field names)
-.config/panel/config.json
+# ...but not the local layer (anything that shouldn't be public)
+.config/panel/config.local.json
 !.config/sesh/
 !.config/sesh/**
 !.config/sketchybar/
