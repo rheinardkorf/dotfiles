@@ -128,6 +128,7 @@ fingerprint changes, and contributions never.
 | enter / ctrl-o | full preview / open in the browser |
 | alt-s / alt-u | mark all seen / mark this one unseen |
 | ctrl-r | fetch this view now |
+| home / end | top / bottom of the list (page up / down: a page) |
 | esc | clear the filter (or leave find) |
 
 kitty maps cmd-f and cmd+shift+h to the alt keys: kitty has its own cmd-f

@@ -51,6 +51,7 @@
 #   tab / shift-tab   next / previous view (panes with views)
 #   alt-f   find: search inside the items (cached details); esc or alt-f to go back
 #   alt-h   show / hide the pane's hidden views (cmd-shift-h via kitty)
+#   home / end   top / bottom of the list (page up / down: a page)
 emulate -L zsh
 setopt extendedglob pipefail
 zmodload zsh/system zsh/datetime
@@ -464,7 +465,8 @@ view() {
       --bind "alt-f:transform($self _toggle_find $me)" \
       --bind "alt-h:transform($self _reveal $me)" \
       --bind "tab:execute-silent($self _view $me 1)+$redraw" \
-      --bind "shift-tab:execute-silent($self _view $me -1)+$redraw"
+      --bind "shift-tab:execute-silent($self _view $me -1)+$redraw" \
+      --bind "home:first" --bind "end:last"
     sleep 0.5
     changed && exec $self view $pane
   done
