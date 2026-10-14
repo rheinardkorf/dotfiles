@@ -15,6 +15,8 @@
 #                                           anything that shouldn't be public
 # JSON, with full-line // comments allowed. Keys:
 #   panes    {name: {source, query, every, title}}    every: 30s / 2m / 1h
+#            or {name: {source, views: [...], ...}}   one pane, several views (tab
+#                                                     switches); each view is the query
 #   layouts  {name: {window: [pane, ...]}}            one tmux window per context
 #   sources  {name: {...}}                            handed to the source script
 #   seen_after                                        e.g. "2s"
@@ -34,6 +36,7 @@
 #   enter   full preview (glow pager)   ctrl-o  open in the browser
 #   alt-s   mark all seen               alt-u   mark this one unseen
 #   ctrl-r  fetch now                   esc     clear the filter
+#   tab / shift-tab   next / previous view (panes with views)
 emulate -L zsh
 setopt extendedglob pipefail
 zmodload zsh/system zsh/datetime
@@ -71,7 +74,24 @@ seconds() {   # 30s / 2m / 1h -> seconds
   esac
 }
 
-pane_source() { conf --arg p "$1" '.panes[$p].source // empty' }
+pane_source() { conf --arg p "${1%%/*}" '.panes[$p].source // empty' }
+
+# A unit is what gets fetched, cached and listed: a pane, or one of its views
+# (pane/view) when the pane has "views" (e.g. aws/alarms, aws/cloudformation).
+pane_views() { conf --arg p "${1%%/*}" '.panes[$p].views // [] | .[]' }
+pane_units() {   # pane_units <pane>
+  local -a views=( ${(f)"$(pane_views $1)"} )
+  if (( $#views )); then print -rl -- ${1}/${^views}; else print -r -- $1; fi
+}
+# cur_unit <pane> <pid>: the unit an open view (fzf instance <pid>) is showing
+cur_unit() {
+  local -a views=( ${(f)"$(pane_views $1)"} )
+  local v
+  (( $#views )) || { print -r -- $1; return }
+  v="$(cat "$PANEL_CACHE/panes/$1/view.$2" 2>/dev/null)"
+  (( ${views[(Ie)$v]} )) || v=$views[1]
+  print -r -- $1/$v
+}
 
 # Run a source script with its cache and config.
 run_source() {
@@ -82,26 +102,28 @@ run_source() {
     "$PANEL_CONFIG_DIR/sources/$source" "$@"
 }
 
-# Tell every open view of a pane to re-read the cache. Each view has its own
-# socket (fzf.<pid>.sock); one that doesn't answer is left over, so remove it.
+# Tell every open view of a unit's pane to re-read the cache. Each view has its
+# own socket (fzf.<pid>.sock); one that doesn't answer is left over, so remove it.
 notify() {
-  local sock
-  for sock in "$PANEL_CACHE/panes/$1"/fzf.*.sock(N=); do
+  local pane=${1%%/*} sock pid
+  for sock in "$PANEL_CACHE/panes/$pane"/fzf.*.sock(N=); do
+    pid=${${sock:t}//[^0-9]/}
     curl -s -m 2 --unix-socket "$sock" -X POST http://localhost \
-      -d "reload($self _lines $1)" >/dev/null 2>&1 || rm -f "$sock"
+      -d "reload($self _lines $pane $pid)" >/dev/null 2>&1 || rm -f "$sock"
   done
   return 0
 }
 
 # --- fetching -------------------------------------------------------------------
-fetch_pane() {
+fetch_pane() {   # fetch_pane <unit>
   local pane=$1 dir="$PANEL_CACHE/panes/$1" source query since out err fd
   source="$(pane_source $pane)"
   [[ -n $source ]] || { print -u2 "panel: unknown pane: $pane"; return 1 }
-  query="$(conf --arg p $pane '.panes[$p].query // ""')"
+  if [[ $pane == */* ]]; then query=${pane#*/}   # a view: its name is the query
+  else query="$(conf --arg p $pane '.panes[$p].query // ""')"; fi
   mkdir -p $dir
   : >> $dir/lock
-  zsystem flock -t 0 -f fd $dir/lock 2>/dev/null || return 0   # already fetching
+  zsystem flock -t 0 -f fd $dir/lock 2>/dev/null || return 2   # already fetching
   since="$(jq -r '.ok_at // empty' $dir/meta.json 2>/dev/null)"
   out="$(mktemp $dir/.items.XXXX)" err="$(mktemp $dir/.err.XXXX)"
   if PANEL_SINCE=$since run_source $source fetch "$query" > $out 2> $err &&
@@ -120,6 +142,7 @@ fetch_pane() {
 }
 
 layout_panes() { conf --arg l "$1" '[.layouts[$l] // {} | .[][]] | unique | .[]' }
+layout_units() { local p; for p in ${(f)"$(layout_panes $1)"}; do pane_units $p; done }
 default_layout() { conf '.layouts | keys_unsorted[0] // empty' }
 
 # Long-running loops (fetcher, view) start again when panel itself changes, so
@@ -131,13 +154,16 @@ fetcher() {
   local layout=${1:-$(default_layout)} pane every last
   print "panel: fetching panes of layout '$layout' when due (ctrl-c stops)"
   while :; do
-    for pane in ${(f)"$(layout_panes $layout)"}; do
-      every="$(seconds "$(conf --arg p $pane '.panes[$p].every // "2m"')")"
+    for pane in ${(f)"$(layout_units $layout)"}; do
+      every="$(seconds "$(conf --arg p ${pane%%/*} '.panes[$p].every // "2m"')")"
       last="$(jq -r '.fetched_at // 0' "$PANEL_CACHE/panes/$pane/meta.json" 2>/dev/null)"
       (( EPOCHSECONDS - ${last:-0} >= every )) || continue
       print -n "$(strftime %H:%M:%S $EPOCHSECONDS)  $pane ... "
-      fetch_pane $pane
-      jq -r 'if .error then "failed: " + .error else "ok" end' "$PANEL_CACHE/panes/$pane/meta.json"
+      if fetch_pane $pane; then
+        jq -r 'if .error then "failed: " + .error else "ok" end' "$PANEL_CACHE/panes/$pane/meta.json"
+      else
+        (( $? == 2 )) && print "already fetching" || print "failed"
+      fi
     done
     sleep 15
     changed && { print "panel changed: restarting"; exec $self fetcher $layout }
@@ -196,7 +222,7 @@ update_window_name() {
   local base p n=0 c seen="$(seen_json)"
   base="$(tmux show-options -wqv -t $TMUX_PANE @panel_name)"
   [[ -n $base ]] || return 0
-  for p in ${(f)"$(tmux list-panes -t $TMUX_PANE -F '#{@panel_pane}')"}; do
+  for p in ${(f)"$(tmux list-panes -t $TMUX_PANE -F '#{@panel_pane}' | while read -r q; do [[ -n $q ]] && pane_units $q; done)"}; do
     [[ -f "$PANEL_CACHE/panes/$p/items.json" ]] || continue
     c="$(jq --arg src "$(pane_source $p)" --argjson seen "$seen" \
       "$JQ_STATE"' [.[] | select(state($seen; $src) != "seen")] | length' "$PANEL_CACHE/panes/$p/items.json")"
@@ -207,13 +233,22 @@ update_window_name() {
 
 # --- viewing --------------------------------------------------------------------
 # One line per item: "<id>\t<display>"; the first line is a header (status of the fetch).
-lines() {
-  local pane=$1 dir="$PANEL_CACHE/panes/$1"
+lines() {   # lines <pane> <pid>
+  local pane="$(cur_unit $1 $2)" tabs="" v cur
+  local dir="$PANEL_CACHE/panes/$pane"
+  # views: all of them in the header, the one shown in bold
+  if [[ $pane == */* ]]; then
+    cur=${pane#*/}
+    for v in ${(f)"$(pane_views $1)"}; do
+      [[ $v == $cur ]] && tabs+=$'\e[0;1m'"$v"$'\e[0;2m  ' || tabs+="$v  "
+    done
+    tabs+="(tab)  ·  "
+  fi
   if [[ ! -f $dir/items.json ]]; then
-    print -r -- $'\t'"waiting for the first fetch... (is 'panel fetcher' running?)"
+    print -r -- $'\t'$'\e[2m'"$tabs"$'\e[0m'"waiting for the first fetch... (is 'panel fetcher' running?)"
     return
   fi
-  jq -r --arg src "$(pane_source $pane)" --argjson now $EPOCHSECONDS \
+  jq -r --arg src "$(pane_source $pane)" --argjson now $EPOCHSECONDS --arg tabs "$tabs" \
     --argjson seen "$(seen_json)" --argjson m "$(cat $dir/meta.json 2>/dev/null || print '{}')" \
     "$JQ_STATE"'
     def hm: if . == null then "never" else strflocaltime("%H:%M") end;
@@ -224,13 +259,14 @@ lines() {
     def pad($n): if length >= $n then .[0:$n - 1] + "…" else . + (" " * ($n - length)) end;
     def rgb($c): "\u001b[38;2;\($c)m";
     "\u001b[2m" as $dim | "\u001b[1m" as $bold | "\u001b[0m" as $off |
-    ((([.[] | .key // .id | length] | max // 8) | if . > 30 then 30 else . end) + 2) as $w |
-    ( "\t" + if $m.error then rgb("243;139;168") + "fetch failed at \($m.fetched_at | hm): \($m.error | split("\n")[0])  ·  showing \($m.ok_at | hm)" + $off
+    # key column: as wide as the longest key (max 30); none when no item has one
+    ([.[] | .key // .id | length] | max // 0 | if . > 30 then 30 else . end) as $w |
+    ( "\t" + $dim + $tabs + $off + if $m.error then rgb("243;139;168") + "fetch failed at \($m.fetched_at | hm): \($m.error | split("\n")[0])  ·  showing \($m.ok_at | hm)" + $off
              else $dim + "fetched \($m.ok_at | hm)  ·  \(length) items  ·  ● new  ◆ changed" + $off end ),
     ( .[] | state($seen; $src) as $st
       | (if $st == "new" then rgb("250;179;135") + "●" + $off
          elif $st == "changed" then rgb("249;226;175") + "◆" + $off else " " end) as $mark
-      | "\(.id)\t\($mark) \($bold)\(.key // .id | pad($w))\($off) \($dim)\(.status // "" | pad(16)) \(.updated | age | pad(5))\($off) \(.title // "")" )
+      | "\(.id)\t\($mark) \(if $w > 0 then $bold + (.key // .id | pad($w + 2)) + $off + " " else "" end)\($dim)\(.status // "" | pad(16)) \(.updated | age | pad(5))\($off) \(.title // "")" )
   ' $dir/items.json
   update_window_name
 }
@@ -260,7 +296,24 @@ preview() {
   fi
 }
 
-open_url() {
+# prompt <pane> <pid>: "Title › " or, with views, "Title › view › "
+prompt() {
+  local title="$(conf --arg p $1 '.panes[$p].title // $p')" unit="$(cur_unit $1 $2)"
+  if [[ $unit == */* ]]; then print -r -- "$title › ${unit#*/} › "; else print -r -- "$title › "; fi
+}
+
+# switch_view <pane> <pid> <+1|-1>: show the next / previous view
+switch_view() {
+  local -a views=( ${(f)"$(pane_views $1)"} )
+  local cur i
+  (( $#views )) || return 0
+  cur="$(cur_unit $1 $2)"; cur=${cur#*/}
+  i=${views[(Ie)$cur]}
+  i=$(( (i - 1 + $3 + $#views) % $#views + 1 ))
+  print -r -- $views[i] > "$PANEL_CACHE/panes/$1/view.$2"
+}
+
+open_url() {   # open_url <unit> <id>
   local url="$(jq -r --arg id $2 '.[] | select(.id == $id) | .url // empty' "$PANEL_CACHE/panes/$1/items.json")"
   [[ -n $url ]] && open "$url"
 }
@@ -272,22 +325,26 @@ view() {
   sock=$dir/fzf.$$.sock   # this view's own: a pane can be open more than once
   title="$(conf --arg p $pane '.panes[$p].title // $p')"
   [[ -n $TMUX_PANE ]] && tmux set-option -p -t $TMUX_PANE @panel_pane $pane
-  trap "rm -f $sock" EXIT
+  trap "rm -f $sock $dir/view.$$" EXIT
   trap 'exit 0' HUP TERM
   # ctrl-c ends fzf and it starts again; close the pane with tmux (prefix x).
   while :; do
     rm -f $sock
-    lines $pane | fzf --ansi --listen=$sock --delimiter=$'\t' --with-nth=2 --id-nth=1 --track \
-      --no-sort --header-lines=1 --layout=reverse --info=inline-right --prompt="$title › " \
+    # prompt first: with --track, fzf drops actions that come after a reload
+    local me="$pane $$" redraw="transform-prompt($self _prompt $pane $$)+reload($self _lines $pane $$)"
+    lines $pane $$ | fzf --ansi --listen=$sock --delimiter=$'\t' --with-nth=2 --id-nth=1 --track \
+      --no-sort --header-lines=1 --layout=reverse --info=inline-right --prompt="$(prompt $pane $$)" \
       --preview "$self _preview $pane {1}" \
       --preview-window 'right,60%,wrap,border-left,<110(down,65%,wrap,border-top)' \
-      --bind "focus:execute-silent($self _focus $pane {1})" \
+      --bind "focus:execute-silent($self _focus $me {1})" \
       --bind "esc:clear-query" \
       --bind "enter:execute($self _preview $pane {1} full)" \
-      --bind "ctrl-o:execute-silent($self _open $pane {1})" \
-      --bind "ctrl-r:execute-silent($self fetch $pane >/dev/null 2>&1 &)" \
-      --bind "alt-s:execute-silent($self _seen_all $pane)+reload($self _lines $pane)" \
-      --bind "alt-u:execute-silent($self _unseen $pane {1})+reload($self _lines $pane)"
+      --bind "ctrl-o:execute-silent($self _open $me {1})" \
+      --bind "ctrl-r:execute-silent($self _fetch_now $me >/dev/null 2>&1 &)" \
+      --bind "alt-s:execute-silent($self _seen_all $me)+reload($self _lines $me)" \
+      --bind "alt-u:execute-silent($self _unseen $me {1})+reload($self _lines $me)" \
+      --bind "tab:execute-silent($self _view $me 1)+$redraw" \
+      --bind "shift-tab:execute-silent($self _view $me -1)+$redraw"
     sleep 0.5
     changed && exec $self view $pane
   done
@@ -322,14 +379,20 @@ up() {
 case $1 in
   up)        up $2 ;;
   fetch)     shift; (( $# )) || set -- ${(f)"$(conf '.panes | keys[]')"}
-             for p in $@; do fetch_pane $p; done ;;
+             for p in $@; do
+               if [[ $p == */* ]]; then fetch_pane $p
+               else for u in ${(f)"$(pane_units $p)"}; do fetch_pane $u; done; fi
+             done ;;
   fetcher)   fetcher $2 ;;
   view)      [[ -n $2 ]] || die "usage: panel view <pane>"; view $2 ;;
-  _lines)    lines $2 ;;
+  _lines)    lines $2 $3 ;;
+  _prompt)   prompt $2 $3 ;;
+  _view)     switch_view $2 $3 $4 ;;
+  _fetch_now) fetch_pane "$(cur_unit $2 $3)" ;;
   _preview)  preview $2 $3 $4 ;;
-  _focus)    on_focus $2 $3 ;;
-  _open)     open_url $2 $3 ;;
-  _seen_all) mark_seen $2 ${(f)"$(jq -r '.[].id' "$PANEL_CACHE/panes/$2/items.json")"} ;;
-  _unseen)   mark_unseen $2 $3 ;;
+  _focus)    on_focus "$(cur_unit $2 $3)" $4 ;;
+  _open)     open_url "$(cur_unit $2 $3)" $4 ;;
+  _seen_all) u="$(cur_unit $2 $3)"; mark_seen $u ${(f)"$(jq -r '.[].id' "$PANEL_CACHE/panes/$u/items.json")"} ;;
+  _unseen)   mark_unseen "$(cur_unit $2 $3)" $4 ;;
   *)         sed -n '2,/^emulate/p' $self | sed -e '$d' -e 's/^# \{0,1\}//'; exit 1 ;;
 esac

@@ -24,6 +24,7 @@ should_track=(
   "$HOME/.scripts/panel"
   "$HOME/.config/panel/sources/jira"
   "$HOME/.config/panel/sources/github"
+  "$HOME/.config/panel/sources/aws"
   "$HOME/.config/panel/config.example.json"
   "$HOME/.config/panel/config.mantis.json"
   "$HOME/.claude/CLAUDE.md"

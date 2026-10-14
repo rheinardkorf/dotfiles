@@ -24,13 +24,32 @@
       "source": "github",
       "query": "is:open is:pr author:@me archived:false sort:updated-desc",
       "every": "2m"
+    },
+
+    // AWS prod, one pane with views (tab switches): alarms, CloudFormation stacks, DynamoDB tables
+    "aws": {
+      "title": "Prod",
+      "source": "aws",
+      "views": ["alarms", "cloudformation", "dynamodb"],
+      "every": "5m"
     }
   },
 
   "layouts": {
     "work": {
       "jira": ["my-tickets"],
-      "github": ["review-requests", "my-prs"]
+      "github": ["review-requests", "my-prs"],
+      "aws": ["aws"]
+    }
+  },
+
+  "sources": {
+    "aws": {
+      "profile": "xteamprod",
+      // Sydney too: things are moving to a local region. Regions that aren't
+      // enabled for the account (e.g. Melbourne) can't be listed: opt in first.
+      "regions": ["us-east-1", "ap-southeast-2"],
+      "login_hint": "use aws-mfa-login"
     }
   }
 }

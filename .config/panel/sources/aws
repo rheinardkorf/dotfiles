@@ -1,0 +1,357 @@
+#!/usr/bin/env zsh
+# panel source: AWS, through the aws CLI.
+#
+#   aws fetch alarms           every CloudWatch alarm (metric and composite), firing first
+#   aws fetch dynamodb         every table with its configuration: PITR, indexes, TTL,
+#                              streams, billing, encryption (refreshed on every fetch)
+#   aws fetch cloudformation   every stack (top-level; nested ones show in their
+#                              parent's preview), refreshing the cached events of
+#                              stacks whose status or update time changed
+#   aws preview <id>           an alarm or a stack as Markdown, from the cache
+#
+# Use them as views of one pane: "views": ["alarms", "cloudformation"].
+#
+# Config (.sources.aws in panel's config):
+#   profile      AWS profile to use (required)
+#   regions      ["us-east-1", ...]   (default: the profile's region)
+#   login_hint   shown as is when the credentials have expired, e.g. "use aws-mfa-login"
+emulate -L zsh
+setopt extendedglob pipefail
+zmodload zsh/datetime
+path=(/opt/homebrew/bin $path)
+
+cache="${PANEL_SOURCE_CACHE:?run me through panel}"
+conf="$PANEL_SOURCE_CONFIG"
+[[ -n $conf ]] || conf='{}'
+profile="$(jq -r '.profile // empty' <<<"$conf")"
+hint="$(jq -r '.login_hint // empty' <<<"$conf")"
+
+# aws with only the configured profile: nothing exported in the environment counts
+awsp() {
+  env -u AWS_ACCESS_KEY_ID -u AWS_SECRET_ACCESS_KEY -u AWS_SESSION_TOKEN -u AWS_PROFILE \
+    aws --profile "$profile" --output json "$@"
+}
+
+# An expired or missing session gets one clear line (it becomes the pane's header).
+fail() {
+  if grep -qE 'ExpiredToken|RequestExpired|NoCredentials|Unable to locate credentials|InvalidClientTokenId|could not be found' <<<"$1"; then
+    print -u2 "AWS session for '$profile' expired or missing${hint:+: $hint}"
+  else
+    print -u2 -r -- "${1:-aws failed}"
+  fi
+  exit 1
+}
+
+# region/stack-name -> a file name
+file() { print -r -- "$cache/stacks/${1//\//__}.json" }
+
+# regions from the config, else the profile's region
+regions() {
+  local -a r=( ${(f)"$(jq -r '.regions[]? // empty' <<<"$conf")"} )
+  (( $#r )) || r=( "$(aws configure get region --profile "$profile" 2>/dev/null)" )
+  print -rl -- $r
+}
+
+# in_regions <out-var> <aws args...>: run in every region at once; collect
+# {region: output} as JSON. Any failure fails the fetch (the last good list stays).
+in_regions() {
+  local var=$1 region tmp acc='{}'; shift
+  local -a rs=( ${(f)"$(regions)"} )
+  (( $#rs )) || fail "no regions: set sources.aws.regions, or a region on profile '$profile'"
+  tmp="$(mktemp -d $cache/.regions.XXXX)"
+  for region in $rs; do
+    { awsp "$@" --region $region > $tmp/$region.json 2> $tmp/$region.err; print $? > $tmp/$region.status } &
+  done
+  wait
+  for region in $rs; do
+    if [[ "$(<$tmp/$region.status)" != 0 ]]; then
+      local out="$(<$tmp/$region.err)"; rm -rf $tmp; fail "$region: $out"
+    fi
+    acc="$(jq -c --arg r $region --argjson acc "$acc" '$acc + {($r): .}' $tmp/$region.json)"
+  done
+  rm -rf $tmp
+  typeset -g $var="$acc"
+}
+
+# Timestamps come as UTC (...Z / +00:00) or with an offset (+11:00): -> epoch
+JQ_EPOCH='def epoch: if . == null then null else
+  (capture("^(?<t>[0-9-]+T[0-9:]+)(\\.[0-9]+)?(?<z>Z|[+-][0-9]{2}:?[0-9]{2})?$") // {t: .[0:19], z: "Z"}) as $c
+  | ($c.t + "Z" | fromdateiso8601)
+    - (if ($c.z // "Z") == "Z" then 0 else ($c.z | sub(":"; "")) as $o
+         | (if $o[0:1] == "-" then -1 else 1 end) * (($o[1:3] | tonumber) * 3600 + ($o[3:5] | tonumber) * 60) end)
+  end;'
+
+fetch_alarms() {
+  local all
+  [[ -n $profile ]] || fail "no profile: set sources.aws.profile in panel's config"
+  mkdir -p $cache
+  in_regions all cloudwatch describe-alarms
+  # one file per fetch: the previews read their alarm from it
+  jq '[to_entries[] | .key as $r | .value
+       | ((.MetricAlarms // [])[], ((.CompositeAlarms // [])[] | . + {Composite: true}))
+       | . + {Region: $r}]' <<<"$all" > $cache/.alarms.json && mv $cache/.alarms.json $cache/alarms.json
+  jq "$JQ_EPOCH"'
+    map({ id: "alarms:\(.Region)/\(.AlarmName)", key: "", title: .AlarmName,
+          status: ({"ALARM": "alarm ✗", "INSUFFICIENT_DATA": "no data", "OK": "ok"}[.StateValue] // (.StateValue | ascii_downcase)),
+          rank: ({"ALARM": 0, "INSUFFICIENT_DATA": 1}[.StateValue] // 2),
+          updated: (.StateUpdatedTimestamp | epoch),
+          url: "https://\(.Region).console.aws.amazon.com/cloudwatch/home?region=\(.Region)#alarmsV2:alarm/\(.AlarmName | @uri)" })
+    | sort_by(.rank, -(.updated // 0)) | map(del(.rank))' $cache/alarms.json
+}
+
+preview_alarm() {   # preview_alarm <region/name>
+  local region=${1%%/*} name=${1#*/}
+  if [[ ! -f $cache/alarms.json ]]; then
+    print "No alarms cached yet: they arrive with the next fetch."
+    return
+  fi
+  jq -r --arg r $region --arg n "$name" "$JQ_EPOCH"'
+    def when: if . == null then "?" else epoch | strflocaltime("%a %-d %b %H:%M") end;
+    def op: {"GreaterThanThreshold": ">", "GreaterThanOrEqualToThreshold": "≥", "LessThanThreshold": "<",
+             "LessThanOrEqualToThreshold": "≤", "LessThanLowerOrGreaterThanUpperThreshold": "outside band",
+             "GreaterThanUpperThreshold": "> band", "LessThanLowerThreshold": "< band"}[.] // .;
+    def arn: split(":") | .[-1];
+    (map(select(.Region == $r and .AlarmName == $n)) | first) as $a
+    | if $a == null then "Alarm **\($n)** is no longer in the cache." else
+      "# \($a.AlarmName)\n",
+      "\(if $a.StateValue == "ALARM" then "**ALARM**" else $a.StateValue end)  ·  \($a.Region)  ·  since \($a.StateUpdatedTimestamp | when)  ",
+      "Actions \(if $a.ActionsEnabled then "enabled" else "**disabled**" end)\n",
+      # their text, quoted, so headings in it cannot pass for sections of ours
+      (if $a.AlarmDescription then ($a.AlarmDescription | split("\n") | map("> " + .) | join("\n")) + "\n" else empty end),
+      "## Why\n", ($a.StateReason // "?"), "",
+      ( if $a.Composite then "## Rule\n", "`\($a.AlarmRule)`", ""
+        else
+          "## Condition\n",
+          ( if $a.Metrics then "Metric math: \([$a.Metrics[] | .Expression // .MetricStat.Metric.MetricName // .Id] | map(select(. != null)) | join(", "))"
+            else "`\($a.Namespace)` **\($a.MetricName)** (\($a.Statistic // $a.ExtendedStatistic // "?"), \($a.Period // "?")s)" end )
+          + "  \($a.ComparisonOperator | op) \($a.Threshold // $a.ThresholdMetricId // "?")"
+          + " for \($a.DatapointsToAlarm // $a.EvaluationPeriods) of \($a.EvaluationPeriods) periods  ",
+          (if $a.TreatMissingData then "Missing data: \($a.TreatMissingData)" else empty end), "",
+          ( ($a.Dimensions // []) | select(length > 0)
+            | "## Dimensions\n\n| name | value |\n| --- | --- |", (.[] | "| \(.Name) | \(.Value) |"), "" )
+        end ),
+      ( [ (($a.AlarmActions // [])[] | "- on alarm: `\(arn)`"),
+          (($a.OKActions // [])[] | "- on ok: `\(arn)`"),
+          (($a.InsufficientDataActions // [])[] | "- on no data: `\(arn)`") ]
+        | select(length > 0) | "## Actions\n", .[] )
+      end' $cache/alarms.json
+}
+
+fetch_dynamodb() {
+  local all tmp now=$EPOCHSECONDS
+  [[ -n $profile ]] || fail "no profile: set sources.aws.profile in panel's config"
+  mkdir -p $cache/dynamodb
+  in_regions all dynamodb list-tables
+  tmp="$(mktemp -d $cache/.dynamodb.XXXX)"
+  # three calls per table, all tables at once (a few at a time)
+  jq -r 'to_entries[] | .key as $r | .value.TableNames[] | "\($r)/\(.)"' <<<"$all" |
+    xargs -P 6 -n 1 zsh -c '
+      profile=$0 r=${2%%/*} t=${2#*/} out="$1/${r}__$t"   # ($0 in a function is its name)
+      a() { env -u AWS_ACCESS_KEY_ID -u AWS_SECRET_ACCESS_KEY -u AWS_SESSION_TOKEN -u AWS_PROFILE \
+              aws --profile "$profile" --output json --region $r "$@"; }
+      { a dynamodb describe-table --table-name "$t" > $out.table 2> $out.err || print -u2 failed >> $out.err } &
+      { a dynamodb describe-continuous-backups --table-name "$t" > $out.pitr 2>> $out.err } &
+      { a dynamodb describe-time-to-live --table-name "$t" > $out.ttl 2>> $out.err } &
+      wait' "$profile" $tmp
+  local tbl region name prev
+  for tbl in $tmp/*.table(N); do
+    region=${${tbl:t}%%__*} name=${${tbl:t:r}#*__}
+    if ! jq -e .Table $tbl >/dev/null 2>&1; then
+      local err="$(<$tmp/${region}__$name.err)"; rm -rf $tmp; fail "$region/$name: $err"
+    fi
+    prev="$cache/dynamodb/${region}__$name.json"
+    jq -n --arg r $region --argjson now $now \
+      --slurpfile t $tbl --slurpfile p $tmp/${region}__$name.pitr --slurpfile l $tmp/${region}__$name.ttl \
+      --argjson old "$(cat $prev 2>/dev/null || print null)" "$JQ_EPOCH"'
+      ($t[0].Table) as $tb
+      | ($p[0].ContinuousBackupsDescription // {}) as $cb | ($l[0].TimeToLiveDescription // {}) as $ttl
+      # what counts as a configuration change (not item counts or sizes)
+      | { keys: $tb.KeySchema, attrs: $tb.AttributeDefinitions,
+          gsi: [($tb.GlobalSecondaryIndexes // [])[] | {IndexName, KeySchema, Projection, p: .ProvisionedThroughput | {ReadCapacityUnits, WriteCapacityUnits}}],
+          lsi: [($tb.LocalSecondaryIndexes // [])[] | {IndexName, KeySchema, Projection}],
+          billing: ($tb.BillingModeSummary.BillingMode // "PROVISIONED"),
+          cap: ($tb.ProvisionedThroughput | {ReadCapacityUnits, WriteCapacityUnits}),
+          stream: $tb.StreamSpecification, sse: $tb.SSEDescription.SSEType, class: $tb.TableClassSummary.TableClass,
+          del: $tb.DeletionProtectionEnabled, pitr: $cb.PointInTimeRecoveryDescription.PointInTimeRecoveryStatus,
+          ttl: [$ttl.TimeToLiveStatus, $ttl.AttributeName] } as $fp
+      | { region: $r, table: $tb, pitr: ($cb.PointInTimeRecoveryDescription // {}), ttl: $ttl, fingerprint: $fp,
+          first_seen: ($old.first_seen // $now),
+          changed_at: (if $old == null then ($tb.CreationDateTime | epoch)
+                       elif $old.fingerprint == $fp then $old.changed_at else $now end) }' > $prev.tmp && mv $prev.tmp $prev
+  done
+  rm -rf $tmp
+  find $cache/dynamodb -name '*.json' -mtime +14 -delete 2>/dev/null
+
+  jq -r 'to_entries[] | .key as $r | .value.TableNames[] | "\($r)__\(.).json"' <<<"$all" |
+    sed "s|^|$cache/dynamodb/|" | xargs jq -s '
+      map({ id: "dynamodb:\(.region)/\(.table.TableName)", key: "", title: .table.TableName,
+            status: (if .table.TableStatus != "ACTIVE" then (.table.TableStatus | ascii_downcase)
+                     elif .pitr.PointInTimeRecoveryStatus == "ENABLED" then "pitr on" else "pitr off ✗" end),
+            updated: .changed_at,
+            url: "https://\(.region).console.aws.amazon.com/dynamodbv2/home?region=\(.region)#table?name=\(.table.TableName | @uri)" })
+      | sort_by(.title)'
+}
+
+preview_dynamodb() {   # preview_dynamodb <region/table>
+  local f="$cache/dynamodb/${1%%/*}__${1#*/}.json"
+  if [[ ! -f $f ]]; then
+    print "No details cached for **${1#*/}** yet: they arrive with the next fetch."
+    return
+  fi
+  jq -r "$JQ_EPOCH"'
+    def when: if . == null then "?" else (if type == "number" then . else epoch end) | strflocaltime("%a %-d %b %Y %H:%M") end;
+    def size: if . == null then "?" elif . < 1024 then "\(.) B" elif . < 1048576 then "\(. / 1024 | floor) KB"
+              elif . < 1073741824 then "\(. / 1048576 * 10 | floor / 10) MB" else "\(. / 1073741824 * 10 | floor / 10) GB" end;
+    def onoff: if . then "on" else "**off**" end;
+    .table as $t | ([$t.AttributeDefinitions[]? | {(.AttributeName): .AttributeType}] | add // {}) as $types
+    | def keys: map("`\(.AttributeName)` (\($types[.AttributeName] // "?"))  \(if .KeyType == "HASH" then "partition" else "sort" end)") | join("  ·  ");
+      def proj: .ProjectionType + (if .NonKeyAttributes then ": " + (.NonKeyAttributes | map("`\(.)`") | join(", ")) else "" end);
+      def cap: if . and (.ReadCapacityUnits // 0) > 0 then "  ·  \(.ReadCapacityUnits) read / \(.WriteCapacityUnits) write" else "" end;
+    "# \($t.TableName)\n",
+    "\(if $t.TableStatus == "ACTIVE" then "ACTIVE" else "**\($t.TableStatus)**" end)  ·  \(.region)  ·  created \($t.CreationDateTime | when)  ",
+    # changes before panel first saw the table are unknown
+    (if .changed_at > (.first_seen // 0) then "Config changed \(.changed_at | when)  "
+     else "Config unchanged since watching began (\(.first_seen | when))  " end),
+    "About \($t.ItemCount) items, \($t.TableSizeBytes | size)  *(AWS updates these every few hours)*  ",
+    "\(if ($t.BillingModeSummary.BillingMode // "PROVISIONED") == "PAY_PER_REQUEST" then "On-demand" else "Provisioned" end)\($t.ProvisionedThroughput | cap)  ·  class \($t.TableClassSummary.TableClass // "STANDARD" | ascii_downcase | gsub("_"; " "))\n",
+
+    "## Protection\n",
+    "- Point-in-time recovery: " + (if .pitr.PointInTimeRecoveryStatus == "ENABLED"
+        then "on (\(.pitr.RecoveryPeriodInDays // 35) days, restorable from \(.pitr.EarliestRestorableDateTime | when))"
+        else "**off**" end),
+    "- Deletion protection: \($t.DeletionProtectionEnabled // false | onoff)",
+    "- Encryption: \(if $t.SSEDescription.SSEType == "KMS" then "KMS (`\($t.SSEDescription.KMSMasterKeyArn // "?" | split("/") | last)`)" else "AWS owned key (default)" end)",
+    "",
+    "## Keys\n", ($t.KeySchema | keys), "",
+
+    ( ($t.GlobalSecondaryIndexes // []) | select(length > 0)
+      | "## Global secondary indexes (\(length))\n",
+        (.[] | "### \(.IndexName)\(if .IndexStatus != "ACTIVE" then "  ·  **\(.IndexStatus)**" else "" end)\n",
+               "- Keys: \(.KeySchema | keys)", "- Projection: \(.Projection | proj)\(.ProvisionedThroughput | cap)", "") ),
+    ( ($t.LocalSecondaryIndexes // []) | select(length > 0)
+      | "## Local secondary indexes (\(length))\n",
+        (.[] | "### \(.IndexName)\n", "- Keys: \(.KeySchema | keys)", "- Projection: \(.Projection | proj)", "") ),
+
+    "## Time to live\n",
+    (if .ttl.TimeToLiveStatus == "ENABLED" then "On, attribute `\(.ttl.AttributeName)`" else (.ttl.TimeToLiveStatus // "DISABLED" | ascii_downcase) end), "",
+    "## Streams\n",
+    (if $t.StreamSpecification.StreamEnabled then "On: \($t.StreamSpecification.StreamViewType)" else "Off" end)
+  ' $f
+}
+
+fetch_cloudformation() {
+  local -a regions need
+  local region out stacks id f
+  [[ -n $profile ]] || fail "no profile: set sources.aws.profile in panel's config"
+  mkdir -p $cache/stacks
+  in_regions out cloudformation describe-stacks
+  stacks="$(jq -c '[to_entries[] | .key as $r | .value.Stacks[] | . + {Region: $r}]' <<<"$out")"
+
+  # Events for stacks that are new or whose status / update time changed.
+  for id in ${(f)"$(jq -r '.[] | select(.ParentId == null) | "\(.Region)/\(.StackName)"' <<<"$stacks")"}; do
+    f="$(file $id)"
+    if [[ -f $f ]] && jq -e --argjson s "$(jq -c --arg id $id '.[] | select("\(.Region)/\(.StackName)" == $id)' <<<"$stacks")" \
+         '.stack.StackStatus == $s.StackStatus and .stack.LastUpdatedTime == $s.LastUpdatedTime' $f >/dev/null 2>&1; then
+      touch $f
+    else
+      need+=$id
+    fi
+  done
+  if (( $#need )); then
+    print -rl -- $need | xargs -P 4 -n 1 zsh -c '
+      region=${2%%/*} name=${2#*/}
+      env -u AWS_ACCESS_KEY_ID -u AWS_SECRET_ACCESS_KEY -u AWS_SESSION_TOKEN -u AWS_PROFILE \
+        aws --profile "$0" --output json cloudformation describe-stack-events --region $region \
+        --stack-name "$name" --max-items 25 > "$1/.$region-$name.events" 2>/dev/null || rm -f "$1/.$region-$name.events"' \
+      "$profile" $cache/stacks
+  fi
+
+  # Cache each top-level stack: itself, its latest events, its nested stacks.
+  jq -c '.[] | select(.ParentId == null)' <<<"$stacks" | while read -r s; do
+    id="$(jq -r '"\(.Region)/\(.StackName)"' <<<"$s")"
+    f="$(file $id)"
+    local ev="$cache/stacks/.${id%%/*}-${id#*/}.events"
+    if [[ -f $ev ]]; then
+      jq -n --argjson s "$s" --slurpfile e $ev --argjson all "$stacks" \
+        '{stack: $s, events: ($e[0].StackEvents // []),
+          nested: [$all[] | select(.RootId == $s.StackId and .ParentId != null) | {StackName, StackStatus, LastUpdatedTime}]}' > $f.tmp && mv $f.tmp $f
+      rm -f $ev
+    elif [[ -f $f ]]; then
+      # events unchanged: refresh the stack itself and its nested list
+      jq --argjson s "$s" --argjson all "$stacks" \
+        '.stack = $s | .nested = [$all[] | select(.RootId == $s.StackId and .ParentId != null) | {StackName, StackStatus, LastUpdatedTime}]' $f > $f.tmp && mv $f.tmp $f
+    fi
+  done
+  find $cache/stacks -name '*.json' -mtime +14 -delete 2>/dev/null
+
+  jq '
+    def epoch: if . == null then null else .[0:19] + "Z" | fromdateiso8601 end;
+    def short: {
+        "CREATE_COMPLETE": "created", "UPDATE_COMPLETE": "updated", "IMPORT_COMPLETE": "imported",
+        "UPDATE_ROLLBACK_COMPLETE": "rolled back ✗", "ROLLBACK_COMPLETE": "create failed ✗",
+        "IMPORT_ROLLBACK_COMPLETE": "import failed ✗", "REVIEW_IN_PROGRESS": "in review" }[.]
+      // (if test("IN_PROGRESS$") then (split("_")[0] | ascii_downcase) + "…"
+          elif test("FAILED$") then (sub("_FAILED$"; "") | gsub("_"; " ") | ascii_downcase) + " failed ✗"
+          else gsub("_"; " ") | ascii_downcase end);
+    [ .[] | select(.ParentId == null) ]
+    | sort_by(.LastUpdatedTime // .CreationTime) | reverse
+    | map({ id: "\(.Region)/\(.StackName)", key: "", title: .StackName,
+            status: (.StackStatus | short),
+            updated: ((.LastUpdatedTime // .CreationTime) | epoch),
+            url: "https://\(.Region).console.aws.amazon.com/cloudformation/home?region=\(.Region)#/stacks/stackinfo?stackId=\(.StackId | @uri)" })' <<<"$stacks"
+}
+
+preview() {
+  local f="$(file $1)"
+  if [[ ! -f $f ]]; then
+    print "No details cached for **$1** yet: they arrive with the next fetch."
+    return
+  fi
+  jq -r '
+    def when: if . == null then "?" else .[0:19] + "Z" | fromdateiso8601 | strflocaltime("%a %-d %b %H:%M") end;
+    def hm: if . == null then "?" else .[0:19] + "Z" | fromdateiso8601 | strflocaltime("%-d %b %H:%M") end;
+    def cell: tostring | gsub("\\s*\n\\s*"; " ") | gsub("\\|"; "\\|");
+    def st: if test("FAILED|ROLLBACK") then "**\(.)**" else . end;
+    .stack as $s
+    | "# \($s.StackName)\n",
+      "\($s.StackStatus | st)  ·  \($s.Region)  ·  updated \(($s.LastUpdatedTime // $s.CreationTime) | when)  ·  created \($s.CreationTime | when)  ",
+      (if $s.StackStatusReason then "Reason: \($s.StackStatusReason)  " else empty end),
+      "Termination protection \(if $s.EnableTerminationProtection then "on" else "off" end)  ·  drift \($s.DriftInformation.StackDriftStatus // "unknown" | ascii_downcase | gsub("_"; " "))\n",
+      (if $s.Description then "\($s.Description)\n" else empty end),
+
+      ( (.events // []) | select(length > 0)
+        | "## Recent events  ·  newest first\n",
+          ( .[] | "- `\(.Timestamp | hm)`  \(.ResourceStatus | st)  `\(.LogicalResourceId)`"
+                  + (if .ResourceStatusReason then "  \(.ResourceStatusReason | cell)" else "" end) ),
+          "" ),
+
+      ( (.nested // []) | select(length > 0)
+        | "## Nested stacks\n", (.[] | "- \(.StackName)  ·  \(.StackStatus | st)"), "" ),
+
+      ( ($s.Outputs // []) | select(length > 0)
+        | "## Outputs\n\n| key | value |\n| --- | --- |", (.[] | "| \(.OutputKey) | \(.OutputValue | cell) |"), "" ),
+
+      ( ($s.Parameters // []) | select(length > 0)
+        | "## Parameters\n\n| key | value |\n| --- | --- |", (.[] | "| \(.ParameterKey) | \(.ParameterValue // "" | cell) |"), "" ),
+
+      ( ($s.Tags // []) | select(length > 0)
+        | "## Tags\n", ([.[] | "`\(.Key)=\(.Value)`"] | join("  ")) )
+  ' $f
+}
+
+case $1 in
+  fetch)
+    case $2 in
+      alarms)         fetch_alarms ;;
+      dynamodb)       fetch_dynamodb ;;
+      cloudformation) fetch_cloudformation ;;
+      *) print -u2 "aws: unknown query '$2' (try: alarms, cloudformation, dynamodb)"; exit 1 ;;
+    esac ;;
+  preview)
+    case $2 in
+      alarms:*)   preview_alarm "${2#alarms:}" ;;
+      dynamodb:*) preview_dynamodb "${2#dynamodb:}" ;;
+      *)        preview "$2" ;;
+    esac ;;
+  *) print -u2 "usage: aws fetch alarms|cloudformation|dynamodb | aws preview <id>"; exit 1 ;;
+esac

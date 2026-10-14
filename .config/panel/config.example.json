@@ -24,6 +24,13 @@
       "source": "github",
       "query": "is:open is:pr author:@me archived:false sort:updated-desc",
       "every": "2m"
+    },
+    // AWS: one pane with views, tab switches (profile and regions: sources.aws)
+    "aws": {
+      "title": "AWS",
+      "source": "aws",
+      "views": ["alarms", "cloudformation", "dynamodb"],
+      "every": "5m"
     }
   },
 
@@ -31,12 +38,19 @@
   "layouts": {
     "work": {
       "jira": ["my-tickets"],
-      "github": ["review-requests", "my-prs"]
+      "github": ["review-requests", "my-prs"],
+      "aws": ["aws"]
     }
   },
 
   // Settings handed to each source script
   "sources": {
+    "aws": {
+      "profile": "my-profile",
+      "regions": ["us-east-1"],
+      // shown when the session has expired
+      "login_hint": "use aws sso login"
+    },
     "jira": {
       // request fields to show first (acli can't list field names)
       "labels": {},
