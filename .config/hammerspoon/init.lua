@@ -43,6 +43,12 @@ hs.hotkey.bind(meh, "c", function()
     hs.execute(home .. "/.scripts/kitty-panel capture " .. home .. "/.scripts/capture --width=600 --height=300 --edge=center-sized --opacity=1", true)
 end)
 
+-- Bind meh + s to the streak logger (q closes it)
+hs.hotkey.bind(meh, "s", function()
+    local home = os.getenv("HOME")
+    hs.execute(home .. "/.scripts/kitty-panel streak " .. home .. "/.scripts/streak --width=600 --height=340 --edge=center-sized --opacity=1", true)
+end)
+
 -- Get the current window app id
 hs.hotkey.bind(hyper, "i", function()
     local app = hs.window.focusedWindow():application()

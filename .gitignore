@@ -95,6 +95,8 @@
 !.config/panel/**
 # ...but not the local layer (anything that shouldn't be public)
 .config/panel/config.local.json
+!.config/streak/
+!.config/streak/targets.json
 !.config/sesh/
 !.config/sesh/**
 !.config/sketchybar/
