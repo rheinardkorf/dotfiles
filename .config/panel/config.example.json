@@ -3,6 +3,8 @@
   // that shouldn't be public goes in config.local.json, merged on top.
   // An item counts as seen after the cursor rests on it this long
   "seen_after": "2s",
+  // no fetching after this long without keyboard or mouse ("0" = never pause)
+  "pause_when_idle": "10m",
 
   // A pane: a source, a query for it, and how often to fetch
   "panes": {
@@ -16,7 +18,7 @@
         // my open tickets with a live SLA timer: counting down first, then breached
         "sla": "sla:assignee = currentUser() AND statusCategory != Done ORDER BY updated DESC"
       },
-      "every": "2m"
+      "every": "5m"
     },
     // GitHub, one pane with views (tab switches): PR views are GitHub searches;
     // "actions" lists workflow runs (repos: sources.github.actions)
@@ -28,14 +30,14 @@
         "my-prs": "is:open is:pr author:@me archived:false sort:updated-desc",
         "review-requests": "is:open is:pr review-requested:@me archived:false sort:updated-desc"
       },
-      "every": "2m"
+      "every": "5m"
     },
     // Google Calendar via gog (read-only): today and the next 7 days
     "calendar": {
       "title": "Calendar",
       "source": "calendar",
       "query": "upcoming",
-      "every": "5m"
+      "every": "15m"
     },
 
     // AWS: one pane with views, tab switches (profile and regions: sources.aws)
@@ -43,7 +45,7 @@
       "title": "AWS",
       "source": "aws",
       "views": ["alarms", "cloudformation", "dynamodb", "sqs"],
-      "every": "5m"
+      "every": {"*": "5m", "cloudformation": "15m", "dynamodb": "1h"}
     }
   },
 

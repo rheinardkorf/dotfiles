@@ -20,7 +20,10 @@
 #                                                     or views: {view: query, ...}
 #   layouts  {name: {window: [pane, ...]}}            one tmux window per context
 #   sources  {name: {...}}                            handed to the source script
+#            every: "5m", or per view: {"*": "5m", "dynamodb": "1h"} (* = the rest)
 #   seen_after                                        e.g. "2s"
+#   pause_when_idle                                   no fetching after this long without
+#                                                     keyboard or mouse (default "10m", "0" = never)
 #   glow_style                                        glow style name or JSON path
 #                                                     (default: glow's own, from glow.yml)
 #
@@ -158,12 +161,33 @@ default_layout() { conf '.layouts | keys_unsorted[0] // empty' }
 loaded="$(zstat +mtime $self)"
 changed() { [[ "$(zstat +mtime $self 2>/dev/null)" != $loaded ]] }
 
+# every <unit>: its fetch interval in seconds ("every" per pane, or per view)
+every() {
+  seconds "$(conf --arg p ${1%%/*} --arg v "${1#*/}" '.panes[$p].every
+    | if type == "object" then (.[$v] // .["*"] // "5m") else (. // "2m") end')"
+}
+
+# Seconds since the last keyboard or mouse input (macOS)
+idle_seconds() { ioreg -c IOHIDSystem | awk '/HIDIdleTime/ { print int($NF / 1000000000); exit }' }
+
 fetcher() {
-  local layout=${1:-$(default_layout)} pane every last
+  local layout=${1:-$(default_layout)} pane every last pause idle paused=0
   print "panel: fetching panes of layout '$layout' when due (ctrl-c stops)"
   while :; do
+    # away from the keyboard: fetch nothing until you're back (then whatever is due)
+    pause="$(seconds "$(conf '.pause_when_idle // "10m"')")"
+    idle="$(idle_seconds)"
+    if (( pause > 0 && ${idle:-0} >= pause )); then
+      (( paused )) || print "$(strftime %H:%M:%S $EPOCHSECONDS)  idle: paused until you're back"
+      paused=1
+      sleep 15
+      changed && { print "panel changed: restarting"; exec $self fetcher $layout }
+      continue
+    fi
+    (( paused )) && print "$(strftime %H:%M:%S $EPOCHSECONDS)  back: fetching what's due"
+    paused=0
     for pane in ${(f)"$(layout_units $layout)"}; do
-      every="$(seconds "$(conf --arg p ${pane%%/*} '.panes[$p].every // "2m"')")"
+      every="$(every $pane)"
       last="$(jq -r '.fetched_at // 0' "$PANEL_CACHE/panes/$pane/meta.json" 2>/dev/null)"
       (( EPOCHSECONDS - ${last:-0} >= every )) || continue
       print -n "$(strftime %H:%M:%S $EPOCHSECONDS)  $pane ... "

@@ -2,6 +2,8 @@
   // mantis (work). Committed, so public: anything sensitive goes in
   // config.local.json (not committed), which is merged on top.
   "seen_after": "2s",
+  // no fetching after this long without keyboard or mouse ("0" = never pause)
+  "pause_when_idle": "10m",
 
   "panes": {
     // Jira, one pane with views (tab switches)
@@ -15,7 +17,7 @@
         // my open tickets with a live SLA timer: counting down first, then breached
         "sla": "sla:assignee = currentUser() AND statusCategory != Done ORDER BY updated DESC"
       },
-      "every": "2m"
+      "every": "5m"
     },
 
     // GitHub, one pane with views (tab switches); no org limit. PR views are
@@ -29,7 +31,7 @@
         "my-prs": "is:open is:pr author:@me archived:false sort:updated-desc",
         "review-requests": "is:open is:pr review-requested:@me archived:false sort:updated-desc"
       },
-      "every": "2m"
+      "every": "5m"
     },
 
     // Google Calendar via gog (read-only): today and the next 7 days
@@ -37,7 +39,7 @@
       "title": "Calendar",
       "source": "calendar",
       "query": "upcoming",
-      "every": "5m"
+      "every": "15m"
     },
 
     // AWS prod, one pane with views (tab switches): alarms, CloudFormation stacks, DynamoDB tables, SQS queues
@@ -45,7 +47,7 @@
       "title": "Prod",
       "source": "aws",
       "views": ["alarms", "cloudformation", "dynamodb", "sqs"],
-      "every": "5m"
+      "every": {"*": "5m", "cloudformation": "15m", "dynamodb": "1h"}
     }
   },
 
