@@ -24,6 +24,14 @@
       },
       "every": "2m"
     },
+    // Google Calendar via gog (read-only): today and the next 7 days
+    "calendar": {
+      "title": "Calendar",
+      "source": "calendar",
+      "query": "upcoming",
+      "every": "5m"
+    },
+
     // AWS: one pane with views, tab switches (profile and regions: sources.aws)
     "aws": {
       "title": "AWS",
@@ -38,7 +46,8 @@
     "work": {
       "jira": ["my-tickets"],
       "github": ["github"],
-      "aws": ["aws"]
+      "aws": ["aws"],
+      "calendar": ["calendar"]
     }
   },
 
