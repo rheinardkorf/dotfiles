@@ -4,6 +4,7 @@
 #   aws fetch alarms           every CloudWatch alarm (metric and composite), firing first
 #   aws fetch dynamodb         every table with its configuration: PITR, indexes, TTL,
 #                              streams, billing, encryption (refreshed on every fetch)
+#   aws fetch sqs              every queue; dead-letter queues with messages first
 #   aws fetch cloudformation   every stack (top-level; nested ones show in their
 #                              parent's preview), refreshing the cached events of
 #                              stacks whose status or update time changed
@@ -67,7 +68,8 @@ in_regions() {
     if [[ "$(<$tmp/$region.status)" != 0 ]]; then
       local out="$(<$tmp/$region.err)"; rm -rf $tmp; fail "$region: $out"
     fi
-    acc="$(jq -c --arg r $region --argjson acc "$acc" '$acc + {($r): .}' $tmp/$region.json)"
+    # (some calls print nothing at all when a region has none, e.g. sqs list-queues)
+    acc="$(jq -sc --arg r $region --argjson acc "$acc" '$acc + {($r): (.[0] // {})}' $tmp/$region.json)"
   done
   rm -rf $tmp
   typeset -g $var="$acc"
@@ -239,6 +241,92 @@ preview_dynamodb() {   # preview_dynamodb <region/table>
   ' $f
 }
 
+# Every queue's attributes; dead-letter queues with messages first. A queue
+# counts as changed when its dead-letter messages rise or its config changes,
+# not on every message count change.
+fetch_sqs() {
+  local all tmp now=$EPOCHSECONDS
+  [[ -n $profile ]] || fail "no profile: set sources.aws.profile in panel's config"
+  mkdir -p $cache
+  in_regions all sqs list-queues
+  tmp="$(mktemp -d $cache/.sqs.XXXX)"
+  jq -r 'to_entries[] | .key as $r | (.value.QueueUrls // [])[] | "\($r) \(.)"' <<<"$all" |
+    xargs -P 8 -L 1 zsh -c '
+      profile=$0 dir=$1 region=$2 url=$3   # xargs appends each line after these
+      env -u AWS_ACCESS_KEY_ID -u AWS_SECRET_ACCESS_KEY -u AWS_SESSION_TOKEN -u AWS_PROFILE \
+        aws --profile "$profile" --output json --region $region sqs get-queue-attributes \
+        --queue-url "$url" --attribute-names All > "$dir/${url##*/}.$region.json" 2>/dev/null ||
+        rm -f "$dir/${url##*/}.$region.json"' "$profile" $tmp
+  local -a files=( $tmp/*.json(N) )
+  local prev="$(cat $cache/sqs.json 2>/dev/null || print '[]')"
+  if (( $#files )); then
+    jq -s --argjson now $now --argjson prev "$prev" '
+      [ .[] | .Attributes ] as $qs
+      # dead-letter queues: what other queues redrive to (or named like one)
+      | [ $qs[] | .RedrivePolicy // empty | fromjson | .deadLetterTargetArn ] as $targets
+      | ($prev | map({(.arn): .}) | add // {}) as $old
+      | $qs | map(
+          (.QueueArn | split(":")) as $a
+          | ((.ApproximateNumberOfMessages // "0") | tonumber) as $n
+          | ((.QueueArn | IN($targets[])) or ($a[5] | test("dlq|dead-?letter"; "i"))) as $dlq
+          | { arn: .QueueArn, region: $a[3], name: $a[5], dlq: $dlq, messages: $n,
+              in_flight: ((.ApproximateNumberOfMessagesNotVisible // "0") | tonumber),
+              delayed: ((.ApproximateNumberOfMessagesDelayed // "0") | tonumber),
+              sources: [ $qs[] | select((.RedrivePolicy // "{}" | fromjson | .deadLetterTargetArn) == ($a | join(":"))) | (.QueueArn | split(":") | last) ],
+              attrs: . }
+          | ($old[.arn]) as $o
+          | . + { changed_at: (
+                if $o == null then (.attrs.LastModifiedTimestamp | tonumber)
+                elif (.attrs.LastModifiedTimestamp | tonumber) > ($o.attrs.LastModifiedTimestamp | tonumber) then $now
+                elif .dlq and .messages > ($o.messages // 0) then $now
+                else $o.changed_at end) })' $files > $cache/.sqs.json && mv $cache/.sqs.json $cache/sqs.json
+  else
+    print '[]' > $cache/sqs.json
+  fi
+  rm -rf $tmp
+  jq '
+    def rank: if .dlq and .messages > 0 then 0 elif (.dlq | not) and .messages > 0 then 1 else 2 end;
+    map({ id: "sqs:\(.region)/\(.name)", key: "", title: .name,
+          status: (if .dlq then (if .messages > 0 then "dlq: \(.messages) ✗" else "dlq empty" end)
+                   elif .messages > 0 then "\(.messages) waiting" else "empty" end),
+          rank: rank, n: .messages, updated: .changed_at,
+          url: "https://\(.region).console.aws.amazon.com/sqs/v3/home?region=\(.region)#/queues/\(.attrs.QueueArn | split(":") as $a | "https://sqs.\($a[3]).amazonaws.com/\($a[4])/\($a[5])" | @uri)" })
+    | sort_by(.rank, -.n, .title) | map(del(.rank, .n))' $cache/sqs.json
+}
+
+preview_sqs() {   # preview_sqs <region/name>
+  if [[ ! -f $cache/sqs.json ]]; then
+    print "No queues cached yet: they arrive with the next fetch."
+    return
+  fi
+  jq -r --arg r ${1%%/*} --arg n "${1#*/}" '
+    def when: tonumber | strflocaltime("%a %-d %b %Y %H:%M");
+    def secs: tonumber | if . < 60 then "\(.)s" elif . < 3600 then "\(. / 60 | floor)m"
+              elif . < 86400 then "\(. / 3600 | floor)h" else "\(. / 86400 | floor) days" end;
+    def size: tonumber | if . < 1024 then "\(.) B" else "\(. / 1024 | floor) KB" end;
+    (map(select(.region == $r and .name == $n)) | first) as $q
+    | if $q == null then "Queue **\($n)** is no longer in the cache." else
+      $q.attrs as $a
+      | "# \($q.name)\n",
+        "\(if $q.dlq then (if $q.messages > 0 then "**Dead-letter queue with \($q.messages) message\(if $q.messages == 1 then "" else "s" end)**" else "Dead-letter queue, empty" end) else "Queue" end)"
+          + "  ·  \(if ($a.FifoQueue // "false") == "true" then "FIFO" else "standard" end)  ·  \($q.region)  ",
+        "Created \($a.CreatedTimestamp | when)  ·  config changed \($a.LastModifiedTimestamp | when)\n",
+        "## Messages\n",
+        "- Waiting: **\($q.messages)**", "- In flight (being processed): \($q.in_flight)", "- Delayed: \($q.delayed)",
+        "",
+        ( select($q.sources | length > 0)
+          | "## Dead letters from\n", ($q.sources[] | "- `\(.)`"), "" ),
+        ( ($a.RedrivePolicy // empty | fromjson)
+          | "## Failed messages go to\n", "`\(.deadLetterTargetArn | split(":") | last)` after \(.maxReceiveCount) tries", "" ),
+        "## Settings\n",
+        "- Visibility timeout: \($a.VisibilityTimeout | secs)",
+        "- Retention: \($a.MessageRetentionPeriod | secs)",
+        "- Delivery delay: \($a.DelaySeconds | secs)  ·  long polling: \($a.ReceiveMessageWaitTimeSeconds | secs)",
+        "- Max message size: \($a.MaximumMessageSize | size)",
+        "- Encryption: \(if $a.KmsMasterKeyId then "KMS (`\($a.KmsMasterKeyId | split("/") | last)`)" elif ($a.SqsManagedSseEnabled // "false") == "true" then "SQS managed" else "**none**" end)"
+      end' $cache/sqs.json
+}
+
 fetch_cloudformation() {
   local -a regions need
   local region out stacks id f
@@ -344,14 +432,16 @@ case $1 in
     case $2 in
       alarms)         fetch_alarms ;;
       dynamodb)       fetch_dynamodb ;;
+      sqs)            fetch_sqs ;;
       cloudformation) fetch_cloudformation ;;
-      *) print -u2 "aws: unknown query '$2' (try: alarms, cloudformation, dynamodb)"; exit 1 ;;
+      *) print -u2 "aws: unknown query '$2' (try: alarms, cloudformation, dynamodb, sqs)"; exit 1 ;;
     esac ;;
   preview)
     case $2 in
       alarms:*)   preview_alarm "${2#alarms:}" ;;
       dynamodb:*) preview_dynamodb "${2#dynamodb:}" ;;
+      sqs:*)      preview_sqs "${2#sqs:}" ;;
       *)        preview "$2" ;;
     esac ;;
-  *) print -u2 "usage: aws fetch alarms|cloudformation|dynamodb | aws preview <id>"; exit 1 ;;
+  *) print -u2 "usage: aws fetch alarms|cloudformation|dynamodb|sqs | aws preview <id>"; exit 1 ;;
 esac

@@ -28,7 +28,7 @@
     "aws": {
       "title": "AWS",
       "source": "aws",
-      "views": ["alarms", "cloudformation", "dynamodb"],
+      "views": ["alarms", "cloudformation", "dynamodb", "sqs"],
       "every": "5m"
     }
   },

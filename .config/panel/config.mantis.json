@@ -26,11 +26,11 @@
       "every": "2m"
     },
 
-    // AWS prod, one pane with views (tab switches): alarms, CloudFormation stacks, DynamoDB tables
+    // AWS prod, one pane with views (tab switches): alarms, CloudFormation stacks, DynamoDB tables, SQS queues
     "aws": {
       "title": "Prod",
       "source": "aws",
-      "views": ["alarms", "cloudformation", "dynamodb"],
+      "views": ["alarms", "cloudformation", "dynamodb", "sqs"],
       "every": "5m"
     }
   },
