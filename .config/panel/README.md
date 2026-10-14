@@ -1,0 +1,160 @@
+# panel
+
+A tmux control panel of fzf lists over cached data. **Sources** fetch data, a
+**cache** holds it, the **engine** (`~/.scripts/panel`) runs everything, and
+**tmux** shows it. Data only ever moves in one direction:
+
+```
+ Jira / GitHub / AWS / Google        (outside world)
+            │  only the fetcher talks to these
+            ▼
+ ┌──────────────────────┐   every N min,    ┌──────────────────────────────┐
+ │  fetcher (tmux win)  │──runs──────────▶  │  source scripts              │
+ │  panel fetcher work  │  per unit         │  ~/.config/panel/sources/*   │
+ └──────────────────────┘                   │  jira · github · aws · calendar
+            │                               └──────────────┬───────────────┘
+            │ writes                                       │ fetch → JSON items
+            ▼                                              ▼
+ ┌────────────────────────────────────────────────────────────────────────┐
+ │  cache  ~/.cache/panel/                                                │
+ │   panes/<pane>[/<view>]/items.json, meta.json   ← the list per unit     │
+ │   sources/<source>/…                            ← details for previews  │
+ │   seen.json                                     ← what you've looked at │
+ └────────────────────────────────────────────────────────────────────────┘
+            ▲ reads only                           │ "reload" over a socket
+            │                                      ▼
+ ┌──────────────────────────────────────────────────────────────────────┐
+ │  tmux session "panel":  one window per context, one fzf list per pane │
+ │  jira · github · aws · calendar · fetch                              │
+ └──────────────────────────────────────────────────────────────────────┘
+```
+
+## 1. Config: what you want to see
+
+`config.<machine>.json` (committed; the machine name comes from
+`~/.config/machine-name`), with `config.local.json` (not committed) merged on
+top. JSON, with full-line `//` comments allowed. See `config.example.json`.
+
+- **panes**: a source plus either one `query`, or several `views` (a list of
+  names, or `{name: query}`). Each pane also has `every` (one interval, or one
+  per view, e.g. `{"*": "5m", "dynamodb": "1h"}`) and optional `hidden_views`.
+- **layouts**: windows mapped to panes. `panel up <layout>` builds them.
+- **sources**: settings handed to each source script (profiles, orgs,
+  exclusions, field labels, …).
+- **global settings**: `seen_after`, `pause_when_idle`, `glow_style`.
+
+The basic unit is a **unit**: a pane, or one view of a pane (`aws/sqs`,
+`jira/sla`). Each unit is fetched, cached and listed on its own.
+
+## 2. Sources: the only code that knows a service
+
+Each source is a small zsh script in `sources/` with up to three commands:
+
+| Command | Does | Rule |
+|---|---|---|
+| `fetch <query>` | prints the list as JSON items, and caches whatever previews will need | the **only** place that calls an API |
+| `preview <id>` | prints one item as **Markdown** | reads the **cache only** |
+| `search <words>` | prints `id<TAB>snippet` for items whose content matches | cache only (optional) |
+
+Every item has the same basic shape: `id`, `title`, `status`, `updated`
+(epoch seconds) and `url`. Optional extras:
+
+- `key`: a short label for the key column
+- `at`: a time to count down to (the age column shows `in 2h`)
+- `seen`: the key seen state is kept under, when it isn't the id (e.g. a
+  recurring meeting series)
+- `spark` and `spark_colors`: a short strip of bars, one colour letter per bar
+  (`g`reen, `r`ed, `y`ellow, `b`lue, `d`im)
+
+The engine knows nothing about any service: it only understands items, so a
+new source is just a new script. Each source handles its service's quirks
+internally:
+
+- **jira** (acli): a second "updated recently" search, so details are only
+  fetched for tickets that changed; `sla:<jql>` lists live SLA timers.
+- **github** (gh): PR searches, Actions runs (all pages, one row per workflow
+  per branch, a run-history spark), and contributions per person with flow
+  stats (lead time, review wait); exclusions are fetched but never shown.
+- **aws** (aws CLI): regions queried in parallel; alarms (with a 24h metric
+  spark), CloudFormation stacks, DynamoDB tables (a config fingerprint marks
+  changes), SQS queues (dead-letter queues with messages first).
+- **calendar** (gog, always `--readonly`): today and the next days, with a
+  countdown and RSVP state.
+
+## 3. The engine: `~/.scripts/panel`
+
+- **`panel up`** builds the tmux session from a layout: one window per
+  context, one pane per entry, plus a `fetch` window.
+- **The fetcher** (`panel fetcher`) loops every 15 seconds and fetches each
+  unit whose interval has passed. Each fetch writes the list and a status file
+  (`ok`, or the error, which becomes the pane's header). It pauses after
+  `pause_when_idle` without keyboard or mouse input, and restarts itself when
+  `panel` changes, so it never runs old code.
+- **Locks**: each unit has a lock, so a ctrl-r fetch and the fetcher can't
+  overlap ("already fetching").
+- **Views**: each pane runs `panel view <pane>`, an fzf list fed by
+  `panel _lines`, which turns cached items into lines (marker, key, status,
+  countdown or age, spark, title). Columns size themselves to fit.
+- **Live refresh**: each open view has its own socket (`fzf.<pid>.sock`).
+  After a fetch, the fetcher sends "reload" to every open view of that pane;
+  the list updates without moving the cursor.
+- **Preview**: fzf calls `panel _preview`, which runs the source's `preview`
+  and renders the Markdown with glow (glow's own style, e.g. Catppuccin).
+  Enter opens the same preview full-screen in glow's pager.
+- **Per-view state**: small files keyed by the fzf instance's pid hold which
+  view is showing (`view.<pid>`), find mode (`find.<pid>`) and revealed hidden
+  views (`reveal.<pid>`). They're removed when the view exits.
+
+## 4. Seen tracking: the quiet part
+
+`seen.json` maps `source:id` (or the item's `seen` key) to the `updated` time
+it had when you looked. Comparing that against the cache gives `●` (new),
+`◆` (changed since you looked) or nothing. An item is marked seen after the
+cursor rests on it for `seen_after`, but only while its pane is actually on
+screen. Window names show the count of unseen items, leaving out hidden views.
+
+Sources control how noisy this is, through what they put in `updated`:
+calendar tracks a recurring series rather than each instance, SQS only changes
+when a dead-letter queue gains messages, DynamoDB only when its config
+fingerprint changes, and contributions never.
+
+## 5. Keys (terminal → kitty → fzf)
+
+| Key | Does |
+|---|---|
+| tab / shift-tab | next / previous view |
+| cmd-f (alt-f) | find inside items; esc leaves |
+| cmd+shift+h (alt-h) | show / hide the pane's hidden views |
+| enter / ctrl-o | full preview / open in the browser |
+| alt-s / alt-u | mark all seen / mark this one unseen |
+| ctrl-r | fetch this view now |
+| esc | clear the filter (or leave find) |
+
+kitty maps cmd-f and cmd+shift+h to the alt keys: kitty has its own cmd-f
+(scrollback search), and AeroSpace holds option-h.
+
+## Design rules
+
+1. **Panes and previews never call an API.** Everything shown comes from the
+   cache: instant, works offline, can't hammer a service.
+2. **Sources are separate from the engine,** so adding a service doesn't touch
+   `panel`.
+3. **Quiet by default:** markers only for real change, an idle pause, hidden
+   views, exclusions.
+4. **No content history:** the cache holds only the current state. The only
+   things kept over time are `seen.json` and numbers (hourly alarm metrics,
+   contribution counts over the window).
+5. **Public versus local:** the engine, sources and machine config live in
+   public dotfiles; work details (profiles, orgs, exclusions, field labels)
+   live in `config.local.json`.
+
+## Writing a source
+
+1. Create `sources/<name>` (executable), reading `$PANEL_SOURCE_CACHE` (its own
+   cache folder) and `$PANEL_SOURCE_CONFIG` (its `sources.<name>` settings as
+   JSON). `$PANEL_SINCE` is the last good fetch of the unit (epoch), if any.
+2. `fetch <query>`: print a JSON array of items on stdout; errors on stderr
+   (the last lines become the pane's header) and a non-zero exit.
+3. `preview <id>`: print Markdown, from the cache only.
+4. Optionally `search <words>`: print `id<TAB>snippet` lines, from the cache.
+5. Add a pane (and a window in a layout) to the config.
