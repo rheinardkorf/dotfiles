@@ -31,7 +31,9 @@
 #   <source> fetch <query>   print the items as JSON: [{id, title, status, updated, url, key?, at?, seen?}]
 #                            (updated in epoch seconds; key: a shorter id for the list;
 #                            at: a start time to count down to; seen: the key seen
-#                            state is kept under, when it isn't the id, e.g. a series).
+#                            state is kept under, when it isn't the id, e.g. a series;
+#                            spark: a short strip like "▂▅▇▃" with spark_colors, one
+#                            letter per character: g(reen) r(ed) y(ellow) b(lue) d(im)).
 #                            $PANEL_SOURCE_CACHE is theirs to keep more in; $PANEL_SINCE
 #                            is the last good fetch (epoch).
 #   <source> preview <id>    print the preview of one item as Markdown, from the cache
@@ -311,6 +313,13 @@ lines() {   # lines <pane> <pid>
     "\u001b[2m" as $dim | "\u001b[1m" as $bold | "\u001b[0m" as $off |
     # key column: as wide as the longest key (max 30); none when no item has one
     ([.[] | .key // .id | length] | max // 0 | if . > 30 then 30 else . end) as $w |
+    # spark column: as wide as the longest strip (right-aligned: newest on the right)
+    ([.[] | .spark // "" | length] | max // 0 | if . > 24 then 24 else . end) as $kw |
+    def spark: (.spark // "" | .[-$kw:]) as $s | (.spark_colors // "" | .[-($s | length):]) as $c
+      | (" " * ($kw - ($s | length)))
+        + ([range(0; $s | length)] | map(
+            {"g": "166;227;161", "r": "243;139;168", "y": "249;226;175", "b": "137;180;250", "d": "108;112;134"}[$c[.:.+1]] as $rgb
+            | (if $rgb then rgb($rgb) else "" end) + $s[.:.+1] + $off) | join(""));
     # status column: as wide as the longest status, between 16 and 24
     ([.[] | .status // "" | length] | max // 0 | [., 15] | max | [., 23] | min) as $sw |
     (if $matches then map(select($matches[.id] != null) | .title += "  " + $dim + "… " + $matches[.id] + " …" + $off) else . end) |
@@ -321,7 +330,7 @@ lines() {   # lines <pane> <pid>
     ( .[] | state($seen; $src) as $st
       | (if $st == "new" then rgb("250;179;135") + "●" + $off
          elif $st == "changed" then rgb("249;226;175") + "◆" + $off else " " end) as $mark
-      | "\(.id)\t\($mark) \(if $w > 0 then $bold + (.key // .id | pad($w + 2)) + $off + " " else "" end)\($dim)\(.status // "" | pad($sw + 1)) \(.at // .updated | age | pad(7))\($off) \(.title // "" | sub("^\\s+"; ""))" )
+      | "\(.id)\t\($mark) \(if $w > 0 then $bold + (.key // .id | pad($w + 2)) + $off + " " else "" end)\($dim)\(.status // "" | pad($sw + 1)) \(.at // .updated | age | pad(7))\($off) \(if $kw > 0 then spark + "  " else "" end)\(.title // "" | sub("^\\s+"; ""))" )
   ' $dir/items.json
   update_window_name
 }

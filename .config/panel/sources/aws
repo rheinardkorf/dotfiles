@@ -16,6 +16,7 @@
 #   profile      AWS profile to use (required)
 #   regions      ["us-east-1", ...]   (default: the profile's region)
 #   login_hint   shown as is when the credentials have expired, e.g. "use aws-mfa-login"
+#   metrics_every  how often alarm metrics (sparklines) are fetched (default 1h)
 emulate -L zsh
 setopt extendedglob pipefail
 zmodload zsh/datetime
@@ -83,6 +84,77 @@ JQ_EPOCH='def epoch: if . == null then null else
          | (if $o[0:1] == "-" then -1 else 1 end) * (($o[1:3] | tonumber) * 3600 + ($o[3:5] | tonumber) * 60) end)
   end;'
 
+# Each alarm's metric over the last 24 hours, for its sparkline: at the alarm's own
+# period and statistic (so the threshold still means something), fetched at most
+# every metrics_every (default 1h). One get-metric-data call per alarm, since
+# metric math alarms reference their own query ids.
+fetch_alarm_metrics() {
+  local every age tmp start end
+  every="$(jq -r '.metrics_every // "1h"' <<<"$conf")"
+  case $every in (<->m) every=$(( ${every%m} * 60 )) ;; (<->h) every=$(( ${every%h} * 3600 )) ;; (*) every=3600 ;; esac
+  if [[ -f $cache/metrics.json ]]; then
+    age=$(( EPOCHSECONDS - $(jq -r '.fetched_at // 0' $cache/metrics.json) ))
+    (( age < every )) && return 0
+  fi
+  tmp="$(mktemp -d $cache/.metrics.XXXX)"
+  start="$(date -u -r $(( EPOCHSECONDS - 86400 )) +%Y-%m-%dT%H:%M:%SZ)" end="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  # one query file per alarm (metric math as defined; simple alarms as one MetricStat)
+  jq -c '.[] | select(.Composite | not) | {key: "\(.Region)/\(.AlarmName)", region: .Region,
+      q: (if .Metrics then .Metrics
+          else [{Id: "m", ReturnData: true, MetricStat: {Metric: {Namespace, MetricName, Dimensions: (.Dimensions // [])},
+                 Period: .Period, Stat: (.Statistic // .ExtendedStatistic)}}] end)}' $cache/alarms.json |
+  jq -r '"\(.region) \(.key)"' |   # (queries written below, numbered in the same order)
+  { local i=0 region key
+    jq -c '.[] | select(.Composite | not) | if .Metrics then .Metrics
+        else [{Id: "m", ReturnData: true, MetricStat: {Metric: {Namespace, MetricName, Dimensions: (.Dimensions // [])},
+               Period: .Period, Stat: (.Statistic // .ExtendedStatistic)}}] end' $cache/alarms.json |
+      while read -r q; do print -r -- "$q" > $tmp/$(( ++i )).q.json; done
+    i=0
+    while read -r region key; do print -r -- "$key" > $tmp/$(( ++i )).key; print -r -- "$i $region"; done
+  } | xargs -P 8 -L 1 zsh -c '
+    profile=$0 dir=$1 start=$2 end=$3 n=$4 region=$5
+    env -u AWS_ACCESS_KEY_ID -u AWS_SECRET_ACCESS_KEY -u AWS_SESSION_TOKEN -u AWS_PROFILE \
+      aws --profile "$profile" --output json --region $region cloudwatch get-metric-data \
+      --start-time $start --end-time $end --scan-by TimestampAscending \
+      --metric-data-queries file://$dir/$n.q.json > $dir/$n.out.json 2>/dev/null || rm -f $dir/$n.out.json' \
+    "$profile" $tmp $start $end
+  # {key: {t: [epochs], v: [values]}} from the series each alarm returns, in one go
+  local -a pairs
+  for o in $tmp/*.out.json(N); do pairs+=( $tmp/${${o:t}%%.*}.key $o ); done
+  if (( $#pairs )); then
+    for k o in $pairs; do jq -c --arg k "$(<$k)" '{key: $k, r: .}' $o; done |
+      jq -s --argjson now $EPOCHSECONDS "$JQ_EPOCH"'{fetched_at: $now, alarms: (map(
+        ([.r.MetricDataResults[] | select((.Values // []) | length > 0)] | first // {Timestamps: [], Values: []}) as $r
+        | {(.key): {t: ($r.Timestamps | map(epoch)), v: $r.Values}}) | add // {})}' > $cache/.metrics.json &&
+      mv $cache/.metrics.json $cache/metrics.json
+  fi
+  rm -rf $tmp
+}
+
+# jq: an alarm's last 24h as 12 two-hour bars, the worst value per bar (highest for
+# "greater than" alarms, lowest for "less than"); scaled to include the threshold,
+# red where the threshold was crossed. Input: {a: alarm, m: {t, v}, now}.
+JQ_ALARM_SPARK='def alarm_spark:
+  .a as $a | .m as $m | .now as $now
+  | ($a.ComparisonOperator // "" | test("^Less")) as $low
+  | ($a.Threshold) as $th
+  | [range(0; 12) | . as $b | ($now - 86400 + $b * 7200) as $from
+      | [range(0; ($m.t // []) | length) | select($m.t[.] >= $from and $m.t[.] < $from + 7200) | $m.v[.]]
+      | if length == 0 then null elif $low then min else max end] as $bars
+  | ([$bars[] | select(. != null)] + (if $th then [$th] else [] end)) as $all
+  | (($all | min) // 0 | if . > 0 then 0 else . end) as $lo | (($all | max) // 0) as $hi
+  | { spark: ($bars | map(if . == null then "·" else
+        ["▁","▂","▃","▄","▅","▆","▇","█"][(if $hi > $lo then ((. - $lo) / ($hi - $lo) * 7 | floor | if . > 7 then 7 else . end) else 0 end)] end) | join("")),
+      spark_colors: ($bars | map(if . == null then "d"
+        elif $th == null then "d"
+        elif ($a.ComparisonOperator | test("GreaterThanOrEqual")) and . >= $th then "r"
+        elif ($a.ComparisonOperator | test("GreaterThanThreshold")) and . > $th then "r"
+        elif ($a.ComparisonOperator | test("LessThanOrEqual")) and . <= $th then "r"
+        elif ($a.ComparisonOperator | test("LessThanThreshold")) and . < $th then "r"
+        else "g" end) | join("")),
+      lo: ([$bars[] | select(. != null)] | min), hi: ([$bars[] | select(. != null)] | max),
+      latest: ([$bars[] | select(. != null)] | last) };'
+
 fetch_alarms() {
   local all
   [[ -n $profile ]] || fail "no profile: set sources.aws.profile in panel's config"
@@ -92,12 +164,16 @@ fetch_alarms() {
   jq '[to_entries[] | .key as $r | .value
        | ((.MetricAlarms // [])[], ((.CompositeAlarms // [])[] | . + {Composite: true}))
        | . + {Region: $r}]' <<<"$all" > $cache/.alarms.json && mv $cache/.alarms.json $cache/alarms.json
-  jq "$JQ_EPOCH"'
-    map({ id: "alarms:\(.Region)/\(.AlarmName)", key: "", title: .AlarmName,
+  fetch_alarm_metrics 2>/dev/null   # best effort: alarms still list without it
+  local metrics="$(jq -c '.alarms // {}' $cache/metrics.json 2>/dev/null || print '{}')"
+  jq --argjson metrics "$metrics" --argjson now $EPOCHSECONDS "$JQ_EPOCH$JQ_ALARM_SPARK"'
+    map(. as $a | ($metrics["\(.Region)/\(.AlarmName)"]) as $m
+      | { id: "alarms:\(.Region)/\(.AlarmName)", key: "", title: .AlarmName,
           status: ({"ALARM": "alarm ✗", "INSUFFICIENT_DATA": "no data", "OK": "ok"}[.StateValue] // (.StateValue | ascii_downcase)),
           rank: ({"ALARM": 0, "INSUFFICIENT_DATA": 1}[.StateValue] // 2),
           updated: (.StateUpdatedTimestamp | epoch),
-          url: "https://\(.Region).console.aws.amazon.com/cloudwatch/home?region=\(.Region)#alarmsV2:alarm/\(.AlarmName | @uri)" })
+          url: "https://\(.Region).console.aws.amazon.com/cloudwatch/home?region=\(.Region)#alarmsV2:alarm/\(.AlarmName | @uri)" }
+        + (if $m then ({a: $a, m: $m, now: $now} | alarm_spark | {spark, spark_colors}) else {} end))
     | sort_by(.rank, -(.updated // 0)) | map(del(.rank))' $cache/alarms.json
 }
 
@@ -107,8 +183,10 @@ preview_alarm() {   # preview_alarm <region/name>
     print "No alarms cached yet: they arrive with the next fetch."
     return
   fi
-  jq -r --arg r $region --arg n "$name" "$JQ_EPOCH"'
+  local metrics="$(jq -c --arg k "$region/$name" '.alarms[$k] // null' $cache/metrics.json 2>/dev/null || print null)"
+  jq -r --arg r $region --arg n "$name" --argjson m "${metrics:-null}" --argjson now $EPOCHSECONDS "$JQ_EPOCH$JQ_ALARM_SPARK"'
     def when: if . == null then "?" else epoch | strflocaltime("%a %-d %b %H:%M") end;
+    def num: if . == null then "–" elif (. | fabs) >= 100 or . == (. | floor) then (. * 10 | round / 10 | tostring) else (. * 100 | round / 100 | tostring) end;
     def op: {"GreaterThanThreshold": ">", "GreaterThanOrEqualToThreshold": "≥", "LessThanThreshold": "<",
              "LessThanOrEqualToThreshold": "≤", "LessThanLowerOrGreaterThanUpperThreshold": "outside band",
              "GreaterThanUpperThreshold": "> band", "LessThanLowerThreshold": "< band"}[.] // .;
@@ -121,6 +199,14 @@ preview_alarm() {   # preview_alarm <region/name>
       # their text, quoted, so headings in it cannot pass for sections of ours
       (if $a.AlarmDescription then ($a.AlarmDescription | split("\n") | map("> " + .) | join("\n")) + "\n" else empty end),
       "## Why\n", ($a.StateReason // "?"), "",
+      ( if $m == null or (($m.v // []) | length) == 0 then empty else
+          ({a: $a, m: $m, now: $now} | alarm_spark) as $sp
+          | "## Last 24 hours\n",
+            "`\($sp.spark)`  two-hour bars, worst value in each",
+            "",
+            "low \($sp.lo | num)  ·  high \($sp.hi | num)  ·  latest \($sp.latest | num)  ·  threshold \($a.Threshold | num)  ",
+            "*In the list, red bars crossed the threshold at least once; the alarm itself needs \($a.DatapointsToAlarm // $a.EvaluationPeriods) of \($a.EvaluationPeriods) periods.*",
+            "" end ),
       ( if $a.Composite then "## Rule\n", "`\($a.AlarmRule)`", ""
         else
           "## Condition\n",

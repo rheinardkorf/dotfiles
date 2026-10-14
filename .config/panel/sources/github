@@ -109,8 +109,12 @@ fetch_actions() {
     local err="$(cat $tmp/*.err(N[1]))"; rm -rf $tmp
     print -u2 -r -- "${err:-no workflow runs could be read}"; return 1
   fi
-  runs="$(jq -sc '[.[] | .workflow_runs[]?]
-    | group_by([.repository.full_name, .workflow_id, (.head_branch // "-")]) | map(max_by(.created_at))' $tmp/*.json(N))"
+  runs="$(jq -sc '
+    def secs: if .run_started_at and .status == "completed"
+      then ((.updated_at | fromdateiso8601) - (.run_started_at | fromdateiso8601)) else null end;
+    [.[] | .workflow_runs[]?]
+    | group_by([.repository.full_name, .workflow_id, (.head_branch // "-")])
+    | map(sort_by(.created_at) | last + {history: (.[-10:] | map({status, conclusion, secs: secs}))})' $tmp/*.json(N))"
   rm -rf $tmp
 
   # Workflow names: a run can carry its own name ("PR #169"), so titles use the
@@ -147,7 +151,15 @@ fetch_actions() {
     def rank: if .status == "completed" and (.conclusion | IN($failed[])) then 0 elif .status != "completed" then 1 else 2 end;
     map({ id: "actions:\(.repository.full_name)/\(.workflow_id)/\(.head_branch // "-")",
           key: .repository.name, title: "\(.workflow) · \(.head_branch // "-") · \(.display_title)",
-          status: short, rank: rank, updated: (.updated_at | fromdateiso8601), url: .html_url })
+          status: short, rank: rank, updated: (.updated_at | fromdateiso8601), url: .html_url }
+        # last runs: height = how long it took, colour = how it ended
+        + ((.history // []) as $h | ([$h[].secs | select(. != null)]) as $d
+           | (($d | min) // 0) as $lo | (($d | max) // 0) as $hi
+           | { spark: ($h | map(if .secs == null then "▄" else
+                 ["▂","▃","▄","▅","▆","▇"][(if $hi > $lo then ((.secs - $lo) / ($hi - $lo) * 5 | round) else 3 end)] end) | join("")),
+               spark_colors: ($h | map(if .status != "completed" then "b"
+                 else {"success": "g", "failure": "r", "timed_out": "r", "startup_failure": "r", "action_required": "r",
+                       "cancelled": "y", "skipped": "d", "neutral": "d"}[.conclusion // ""] // "d" end) | join("")) }))
     | sort_by(.rank, -.updated) | map(del(.rank))' <<<"$runs"
 }
 
