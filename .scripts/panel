@@ -16,7 +16,8 @@
 # JSON, with full-line // comments allowed. Keys:
 #   panes    {name: {source, query, every, title}}    every: 30s / 2m / 1h
 #            or {name: {source, views: [...], ...}}   one pane, several views (tab
-#                                                     switches); each view is the query
+#                                                     switches); each view is the query,
+#                                                     or views: {view: query, ...}
 #   layouts  {name: {window: [pane, ...]}}            one tmux window per context
 #   sources  {name: {...}}                            handed to the source script
 #   seen_after                                        e.g. "2s"
@@ -78,7 +79,8 @@ pane_source() { conf --arg p "${1%%/*}" '.panes[$p].source // empty' }
 
 # A unit is what gets fetched, cached and listed: a pane, or one of its views
 # (pane/view) when the pane has "views" (e.g. aws/alarms, aws/cloudformation).
-pane_views() { conf --arg p "${1%%/*}" '.panes[$p].views // [] | .[]' }
+# views: ["a", "b"] (each name is also the query) or {"a": "query", ...}
+pane_views() { conf --arg p "${1%%/*}" '.panes[$p].views // [] | if type == "object" then keys_unsorted[] else .[] end' }
 pane_units() {   # pane_units <pane>
   local -a views=( ${(f)"$(pane_views $1)"} )
   if (( $#views )); then print -rl -- ${1}/${^views}; else print -r -- $1; fi
@@ -119,7 +121,8 @@ fetch_pane() {   # fetch_pane <unit>
   local pane=$1 dir="$PANEL_CACHE/panes/$1" source query since out err fd
   source="$(pane_source $pane)"
   [[ -n $source ]] || { print -u2 "panel: unknown pane: $pane"; return 1 }
-  if [[ $pane == */* ]]; then query=${pane#*/}   # a view: its name is the query
+  if [[ $pane == */* ]]; then   # a view: its query, or its name
+    query="$(conf --arg p ${pane%%/*} --arg v ${pane#*/} '.panes[$p].views | if type == "object" then .[$v] else $v end')"
   else query="$(conf --arg p $pane '.panes[$p].query // ""')"; fi
   mkdir -p $dir
   : >> $dir/lock

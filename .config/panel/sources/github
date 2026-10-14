@@ -1,15 +1,25 @@
 #!/usr/bin/env zsh
-# panel source: GitHub pull requests, through gh (log in once: gh auth login).
+# panel source: GitHub pull requests and Actions runs, through gh (gh auth login).
 #
 #   github fetch <query>   search PRs (GitHub search syntax, e.g. "is:open is:pr
 #                          review-requested:@me"), and refresh the cached details
 #                          (description, reviews, comments, checks) of changed ones
-#   github preview <id>    the PR as Markdown, from the cache
+#   github fetch actions   the latest run of each workflow per branch, in the repos
+#                          you were active in, have open PRs in, or list in config
+#   github preview <id>    a PR or a run as Markdown, from the cache
+#
+# Config (.sources.github in panel's config), all optional:
+#   actions.repos         ["owner/repo", ...]: always watched
+#   actions.active_days   how far back your activity counts (default 14)
+#   actions.runs_days     how far back runs are listed (default 14)
 emulate -L zsh
 setopt extendedglob pipefail
+zmodload zsh/datetime
 path=(/opt/homebrew/bin $path)
 
 cache="${PANEL_SOURCE_CACHE:?run me through panel}"
+conf="$PANEL_SOURCE_CONFIG"
+[[ -n $conf ]] || conf='{}'
 items="$cache/items"
 FIELDS=number,title,body,author,state,isDraft,reviewDecision,headRefName,baseRefName,additions,deletions,changedFiles,comments,reviews,statusCheckRollup,url,updatedAt,createdAt,labels,mergeable,reviewRequests
 
@@ -58,6 +68,130 @@ fetch() {
           url: .url })' <<<"$list"
 }
 
+# --- actions --------------------------------------------------------------------
+# Repos to watch: recently active (your GitHub activity), the configured list,
+# and repos where you have an open PR or a review request.
+action_repos() {
+  local login days cutoff
+  local -a repos
+  [[ -s $cache/login ]] || gh api user --jq .login > $cache/login 2>/dev/null
+  login="$(<$cache/login)"
+  days="$(jq -r '.actions.active_days // 14' <<<"$conf")"
+  cutoff="$(date -u -r $(( EPOCHSECONDS - days * 86400 )) +%Y-%m-%dT%H:%M:%SZ)"
+  [[ -n $login ]] && repos+=( ${(f)"$(gh api "users/$login/events?per_page=100" --paginate \
+    --jq ".[] | select(.created_at >= \"$cutoff\") | .repo.name" 2>/dev/null)"} )
+  repos+=( ${(f)"$(jq -r '.actions.repos[]? // empty' <<<"$conf")"} )
+  repos+=( ${(f)"$(gh search prs is:open is:pr author:@me archived:false --limit 100 \
+    --json repository --jq '.[].repository.nameWithOwner' 2>/dev/null)"} )
+  repos+=( ${(f)"$(gh search prs is:open is:pr review-requested:@me archived:false --limit 100 \
+    --json repository --jq '.[].repository.nameWithOwner' 2>/dev/null)"} )
+  print -rl -- ${(u)repos}
+}
+
+FAILED='["failure", "timed_out", "startup_failure", "action_required"]'
+
+# One row per workflow per branch: its latest run in the last runs_days (14).
+# Jobs are fetched only for failed or running runs, and kept until the run changes.
+fetch_actions() {
+  local rdays rcut tmp runs
+  local -a repos
+  mkdir -p $cache/runs
+  repos=( ${(f)"$(action_repos)"} )
+  (( $#repos )) || { print -r -- '[]'; return 0 }
+  rdays="$(jq -r '.actions.runs_days // 14' <<<"$conf")"
+  rcut="$(date -u -r $(( EPOCHSECONDS - rdays * 86400 )) +%Y-%m-%d)"
+  tmp="$(mktemp -d $cache/.runs.XXXX)"
+  print -rl -- $repos | xargs -P 6 -n 1 zsh -c '
+    f="$1/${2//\//__}"
+    gh api --paginate "repos/$2/actions/runs?per_page=100&created=%3E%3D$0" > "$f.json" 2> "$f.err" || rm -f "$f.json"' $rcut $tmp
+  # A repo without Actions (or access) is skipped; all of them failing is an error.
+  if [[ -z $tmp/*.json(N[1]) ]]; then
+    local err="$(cat $tmp/*.err(N[1]))"; rm -rf $tmp
+    print -u2 -r -- "${err:-no workflow runs could be read}"; return 1
+  fi
+  runs="$(jq -sc '[.[] | .workflow_runs[]?]
+    | group_by([.repository.full_name, .workflow_id, (.head_branch // "-")]) | map(max_by(.created_at))' $tmp/*.json(N))"
+  rm -rf $tmp
+
+  # Workflow names: a run can carry its own name ("PR #169"), so titles use the
+  # workflow's. Cached per repo; looked up again when an unknown workflow appears.
+  local repo wfile names='{}'
+  for repo in ${(f)"$(jq -r '[.[].repository.full_name] | unique[]' <<<"$runs")"}; do
+    wfile="$cache/runs/${repo//\//__}.workflows.json"
+    if [[ ! -f $wfile ]] || jq -e --slurpfile w $wfile --arg r $repo \
+         'any(.[] | select(.repository.full_name == $r); ((.workflow_id | tostring) as $id | $w[0][$id]) == null)' <<<"$runs" >/dev/null; then
+      gh api --paginate "repos/$repo/actions/workflows?per_page=100" --jq '.workflows[] | {(.id | tostring): .name}' 2>/dev/null |
+        jq -s 'add // {}' > $wfile.tmp && mv $wfile.tmp $wfile || rm -f $wfile.tmp
+    fi
+    [[ -f $wfile ]] && names="$(jq -c --slurpfile w $wfile '. + $w[0]' <<<"$names")"
+  done
+  runs="$(jq -c --argjson n "$names" 'map(. + {workflow: ($n[.workflow_id | tostring] // .name)})' <<<"$runs")"
+
+  jq -r --argjson failed "$FAILED" '.[] | select(.status != "completed" or (.conclusion | IN($failed[])))
+    | "\(.repository.full_name) \(.id) \(.run_attempt) \(.updated_at)"' <<<"$runs" |
+  while read -r repo id att upd; do
+    local jf="$cache/runs/${repo//\//__}__$id-$att.jobs.json"
+    [[ -f $jf && "$(jq -r .updated_at $jf)" == $upd ]] && { touch $jf; continue }
+    print -r -- "$repo $id $att $upd $jf"
+  done | xargs -P 6 -L 1 zsh -c '
+    gh api "repos/$0/actions/runs/$1/attempts/$2/jobs?per_page=100" 2>/dev/null |
+      jq --arg u "$3" "{updated_at: \$u, jobs: .jobs}" > "$4.tmp" && mv "$4.tmp" "$4" || rm -f "$4.tmp"'
+  find $cache/runs -name '*.jobs.json' -mtime +14 -delete 2>/dev/null
+  print -r -- "$runs" > $cache/.runs.json && mv $cache/.runs.json $cache/runs.json
+
+  jq --argjson failed "$FAILED" '
+    def short: if .status == "in_progress" then "running…" elif .status != "completed" then "queued…"
+      else {"success": "success", "failure": "failed ✗", "cancelled": "cancelled", "skipped": "skipped",
+            "timed_out": "timed out ✗", "action_required": "needs action ✗", "startup_failure": "startup failed ✗"}[.conclusion]
+           // (.conclusion // "?") end;
+    def rank: if .status == "completed" and (.conclusion | IN($failed[])) then 0 elif .status != "completed" then 1 else 2 end;
+    map({ id: "actions:\(.repository.full_name)/\(.workflow_id)/\(.head_branch // "-")",
+          key: .repository.name, title: "\(.workflow) · \(.head_branch // "-") · \(.display_title)",
+          status: short, rank: rank, updated: (.updated_at | fromdateiso8601), url: .html_url })
+    | sort_by(.rank, -.updated) | map(del(.rank))' <<<"$runs"
+}
+
+preview_run() {   # preview_run actions:<owner/repo>/<workflow id>/<branch>
+  local rest=${1#actions:} repo wf branch run id att jf
+  repo="${rest%%/*}/${${rest#*/}%%/*}"; rest=${${rest#*/}#*/}; wf=${rest%%/*}; branch=${rest#*/}
+  if [[ ! -f $cache/runs.json ]]; then
+    print "No workflow runs cached yet: they arrive with the next fetch."
+    return
+  fi
+  run="$(jq -c --arg r $repo --argjson w $wf --arg b "$branch" \
+    'map(select(.repository.full_name == $r and .workflow_id == $w and (.head_branch // "-") == $b)) | first' $cache/runs.json)"
+  if [[ $run == null ]]; then
+    print "This workflow run is no longer in the cache."
+    return
+  fi
+  id="$(jq -r .id <<<"$run")" att="$(jq -r .run_attempt <<<"$run")"
+  jf="$cache/runs/${repo//\//__}__$id-$att.jobs.json"
+  jq -nr --argjson r "$run" --argjson j "$( [[ -f $jf ]] && cat $jf || print null)" --argjson now $EPOCHSECONDS '
+    def when: if . == null then "?" else fromdateiso8601 | strflocaltime("%a %-d %b %H:%M") end;
+    def dur: if . < 60 then "\(.)s" elif . < 3600 then "\(. / 60 | floor)m \(. % 60)s"
+             else "\(. / 3600 | floor)h \(. % 3600 / 60 | floor)m" end;
+    def state: if .status == "in_progress" then "Running" elif .status != "completed" then "Queued"
+      else {"success": "Succeeded", "failure": "**Failed**", "cancelled": "Cancelled", "skipped": "Skipped",
+            "timed_out": "**Timed out**", "action_required": "**Needs action**", "startup_failure": "**Startup failed**"}[.conclusion]
+           // (.conclusion // "?") end;
+    def mark: if . == "success" then "✓" elif . == "skipped" then "–" elif . == "cancelled" then "⊘"
+              elif . == "in_progress" or . == "queued" or . == "waiting" then "…" else "✗" end;
+    ($r.run_started_at // $r.created_at) as $start
+    | "# \($r.repository.name) · \($r.workflow // $r.name)\n",
+      "\($r | state)  ·  `\($r.head_branch // "-")`  ·  \($r.event)  ·  by \($r.triggering_actor.login // $r.actor.login // "?")"
+        + (if ($r.run_attempt // 1) > 1 then "  ·  attempt \($r.run_attempt)" else "" end) + "  ",
+      "\($r.display_title)  ·  `\($r.head_sha[0:7])`  ",
+      "Started \($start | when)  ·  "
+        + (if $r.status == "completed" then "took \((($r.updated_at | fromdateiso8601) - ($start | fromdateiso8601)) | dur)"
+           else "running for \(($now - ($start | fromdateiso8601)) | dur)" end) + "  ",
+      "[Run #\($r.run_number) on GitHub](\($r.html_url))\n",
+      ( if $j then "## Jobs\n",
+          ( $j.jobs[] | "- \(.conclusion // .status | mark) **\(.name)**  \(.conclusion // .status)"
+              + ([.steps[]? | select(.conclusion == "failure") | .name] | if length > 0 then "  ·  failed at: " + join(", ") else "" end) )
+        elif $r.conclusion == "success" then "All jobs passed."
+        else empty end )'
+}
+
 preview() {
   local f="$(file $1)"
   if [[ ! -f $f ]]; then
@@ -99,7 +233,15 @@ preview() {
 }
 
 case $1 in
-  fetch)   fetch "$2" ;;
-  preview) preview "$2" ;;
+  fetch)
+    case $2 in
+      actions) fetch_actions ;;
+      *)       fetch "$2" ;;
+    esac ;;
+  preview)
+    case $2 in
+      actions:*) preview_run "$2" ;;
+      *)         preview "$2" ;;
+    esac ;;
   *)       print -u2 "usage: github fetch <query> | github preview <owner/repo#number>"; exit 1 ;;
 esac

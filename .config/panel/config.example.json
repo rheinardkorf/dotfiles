@@ -12,17 +12,16 @@
       "query": "assignee = currentUser() AND statusCategory != Done ORDER BY updated DESC",
       "every": "2m"
     },
-    // GitHub search syntax; gh does the fetching
-    "review-requests": {
-      "title": "Reviews for me",
+    // GitHub, one pane with views (tab switches): PR views are GitHub searches;
+    // "actions" lists workflow runs (repos: sources.github.actions)
+    "github": {
+      "title": "GitHub",
       "source": "github",
-      "query": "is:open is:pr review-requested:@me archived:false sort:updated-desc",
-      "every": "2m"
-    },
-    "my-prs": {
-      "title": "My PRs",
-      "source": "github",
-      "query": "is:open is:pr author:@me archived:false sort:updated-desc",
+      "views": {
+        "actions": "actions",
+        "my-prs": "is:open is:pr author:@me archived:false sort:updated-desc",
+        "review-requests": "is:open is:pr review-requested:@me archived:false sort:updated-desc"
+      },
       "every": "2m"
     },
     // AWS: one pane with views, tab switches (profile and regions: sources.aws)
@@ -38,7 +37,7 @@
   "layouts": {
     "work": {
       "jira": ["my-tickets"],
-      "github": ["review-requests", "my-prs"],
+      "github": ["github"],
       "aws": ["aws"]
     }
   },

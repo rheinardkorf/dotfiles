@@ -12,17 +12,17 @@
       "every": "2m"
     },
 
-    // GitHub: everything I can see, no org limit
-    "review-requests": {
-      "title": "Reviews for me",
+    // GitHub, one pane with views (tab switches); no org limit. PR views are
+    // GitHub searches; actions watches repos I'm active in, have PRs in, or list
+    // in sources.github.actions.repos.
+    "github": {
+      "title": "GitHub",
       "source": "github",
-      "query": "is:open is:pr review-requested:@me archived:false sort:updated-desc",
-      "every": "2m"
-    },
-    "my-prs": {
-      "title": "My PRs",
-      "source": "github",
-      "query": "is:open is:pr author:@me archived:false sort:updated-desc",
+      "views": {
+        "actions": "actions",
+        "my-prs": "is:open is:pr author:@me archived:false sort:updated-desc",
+        "review-requests": "is:open is:pr review-requested:@me archived:false sort:updated-desc"
+      },
       "every": "2m"
     },
 
@@ -38,18 +38,8 @@
   "layouts": {
     "work": {
       "jira": ["my-tickets"],
-      "github": ["review-requests", "my-prs"],
+      "github": ["github"],
       "aws": ["aws"]
-    }
-  },
-
-  "sources": {
-    "aws": {
-      "profile": "xteamprod",
-      // Sydney too: things are moving to a local region. Regions that aren't
-      // enabled for the account (e.g. Melbourne) can't be listed: opt in first.
-      "regions": ["us-east-1", "ap-southeast-2"],
-      "login_hint": "use aws-mfa-login"
     }
   }
 }
