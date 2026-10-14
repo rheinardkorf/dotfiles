@@ -1,53 +1,128 @@
-# Get a 12-hour MFA session for an AWS profile and load it into this shell.
-# Then start claude (or anything else) from the same terminal.
-#   aws-mfa-login <profile>
-# The profile's MFA device and region come from ~/.aws/config:
-#   aws configure set mfa_serial arn:aws:iam::<account>:mfa/<device> --profile <profile>
+# Get a 12-hour MFA session with a long-lived key and save it as another profile.
+#   aws-mfa-login <long-lived-profile> <target-profile>     e.g. aws-mfa-login xteammfa xteamdev
+# Then use --profile <target> (or a role profile whose source_profile is the
+# target) from any shell. Nothing is exported to this one.
+#
+# The long-lived profile's MFA device comes from ~/.aws/config:
+#   aws configure set mfa_serial arn:aws:iam::<account>:mfa/<device> --profile <long-lived>
+# The session is saved in ~/.aws/credentials as <target>. A target that holds a
+# long-term key is refused, so a typo can't overwrite one. (That file is
+# rewritten when a session is saved: comments in it aren't kept.)
 function aws-mfa-login() {
-  local profile="$1" mfa_serial region code creds
+  local source="$1" target="$2" mfa_serial code creds
 
-  if [[ -z "$profile" ]]; then
-    echo "usage: aws-mfa-login <profile>"
+  if [[ -z "$source" || -z "$target" ]]; then
+    echo "usage: aws-mfa-login <long-lived-profile> <target-profile>   (e.g. xteammfa xteamdev)"
     echo "profiles: $(aws configure list-profiles 2>/dev/null | tr '\n' ' ')"
     return 1
   fi
-
-  mfa_serial="$(aws configure get mfa_serial --profile "$profile" 2>/dev/null)"
-  if [[ -z "$mfa_serial" ]]; then
-    echo "Profile '$profile' has no mfa_serial in ~/.aws/config. Add it with:"
-    echo "  aws configure set mfa_serial <mfa-device-arn> --profile $profile"
+  if [[ "$source" == "$target" ]]; then
+    echo "The target can't be the long-lived profile: that would overwrite its key."
     return 1
   fi
-  region="$(aws configure get region --profile "$profile" 2>/dev/null)"
+  if [[ "$(_aws_profile_kind "$source")" != key ]]; then
+    echo "'$source' has no long-term key in $(_aws_creds_file)."
+    return 1
+  fi
+  if [[ "$(_aws_profile_kind "$target")" == key ]]; then
+    echo "'$target' holds a long-term key in $(_aws_creds_file): not overwriting it."
+    return 1
+  fi
+  mfa_serial="$(aws configure get mfa_serial --profile "$source" 2>/dev/null)"
+  if [[ -z "$mfa_serial" ]]; then
+    echo "Profile '$source' has no mfa_serial in ~/.aws/config. Add it with:"
+    echo "  aws configure set mfa_serial <mfa-device-arn> --profile $source"
+    return 1
+  fi
 
-  # Start clean so the long-term key is only used to request the session.
-  unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN AWS_CREDENTIAL_EXPIRATION
-
-  printf "MFA code for %s (from 1Password): " "$profile"
+  printf "MFA code for %s (from 1Password): " "$source"
   read -r code
 
-  creds=$(aws sts get-session-token --profile "$profile" \
+  # Only the long-lived key may sign this request, whatever this shell has set.
+  creds=$(env -u AWS_ACCESS_KEY_ID -u AWS_SECRET_ACCESS_KEY -u AWS_SESSION_TOKEN -u AWS_PROFILE \
+    aws sts get-session-token --profile "$source" \
     --serial-number "$mfa_serial" --token-code "$code" \
     --duration-seconds 43200 --query Credentials --output json) || {
     echo "Failed to get an MFA session. Check the code and try again."
     return 1
   }
 
-  export AWS_ACCESS_KEY_ID=$(echo "$creds" | jq -r .AccessKeyId)
-  export AWS_SECRET_ACCESS_KEY=$(echo "$creds" | jq -r .SecretAccessKey)
-  export AWS_SESSION_TOKEN=$(echo "$creds" | jq -r .SessionToken)
-  export AWS_CREDENTIAL_EXPIRATION=$(echo "$creds" | jq -r .Expiration)
-  export AWS_REGION="${region:-us-east-1}"
-
-  echo "MFA session for $profile active until $AWS_CREDENTIAL_EXPIRATION ($AWS_REGION)."
+  AWS_MFA_SESSION="$creds" _aws_save_session "$target" "$source" || return 1
+  echo "$target: MFA session (signed in with $source) active until $(_aws_session_expiry "$target")."
 }
 
-# Drop the MFA session from this shell.
+# Remove a saved MFA session, ending it for every shell (and anything else using it).
+#   aws-mfa-logout <target-profile>
 function aws-mfa-logout() {
-  unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN AWS_CREDENTIAL_EXPIRATION
-  echo "MFA session cleared."
+  local target="$1"
+  if [[ -z "$target" ]]; then
+    echo "usage: aws-mfa-logout <target-profile>"
+    return 1
+  fi
+  python3 -I - "$(_aws_creds_file)" "$target" <<'PY'
+import configparser, os, sys, tempfile
+path, target = sys.argv[1], sys.argv[2]
+c = configparser.RawConfigParser(); c.read(path)
+if not c.has_section(target):
+    sys.exit(f"'{target}' has no saved session.")
+if not c.has_option(target, "mfa_session_expiration"):
+    sys.exit(f"'{target}' isn't a session saved by aws-mfa-login: not removing it.")
+c.remove_section(target)
+fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path))
+with os.fdopen(fd, "w") as f: c.write(f)
+os.chmod(tmp, 0o600); os.replace(tmp, path)
+print(f"{target}: MFA session removed.")
+PY
 }
 
-# Tab-complete profile names for aws-mfa-login
+# --- helpers --------------------------------------------------------------------
+_aws_creds_file() { print -r -- "${AWS_SHARED_CREDENTIALS_FILE:-$HOME/.aws/credentials}" }
+
+# _aws_profile_kind <profile>: none / session / key (in the credentials file)
+_aws_profile_kind() {
+  python3 -I - "$(_aws_creds_file)" "$1" <<'PY'
+import configparser, sys
+c = configparser.RawConfigParser(); c.read(sys.argv[1])
+s = sys.argv[2]
+if not c.has_option(s, "aws_access_key_id"): print("none")
+elif c.has_option(s, "aws_session_token"): print("session")
+else: print("key")
+PY
+}
+
+# _aws_save_session <target> <source>: write $AWS_MFA_SESSION (sts JSON) as <target>.
+# The secrets come in through the environment, never as arguments (visible in ps).
+_aws_save_session() {
+  python3 -I - "$(_aws_creds_file)" "$1" "$2" <<'PY'
+import configparser, json, os, sys, tempfile
+path, target, source = sys.argv[1:4]
+s = json.loads(os.environ["AWS_MFA_SESSION"])
+c = configparser.RawConfigParser(); c.read(path)
+if c.has_option(target, "aws_access_key_id") and not c.has_option(target, "aws_session_token"):
+    sys.exit(f"'{target}' holds a long-term key: not overwriting it.")
+if c.has_section(target): c.remove_section(target)
+c.add_section(target)
+c.set(target, "aws_access_key_id", s["AccessKeyId"])
+c.set(target, "aws_secret_access_key", s["SecretAccessKey"])
+c.set(target, "aws_session_token", s["SessionToken"])
+c.set(target, "mfa_session_expiration", s["Expiration"])
+c.set(target, "mfa_session_source", source)
+fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path))
+with os.fdopen(fd, "w") as f: c.write(f)
+os.chmod(tmp, 0o600); os.replace(tmp, path)
+PY
+}
+
+# _aws_session_expiry <target>: when the saved session ends, in local time
+_aws_session_expiry() {
+  python3 -I - "$(_aws_creds_file)" "$1" <<'PY'
+import configparser, datetime, sys
+c = configparser.RawConfigParser(); c.read(sys.argv[1])
+e = c.get(sys.argv[2], "mfa_session_expiration", fallback="")
+print(datetime.datetime.fromisoformat(e).astimezone().strftime("%a %-d %b %H:%M") if e else "?")
+PY
+}
+
+# Tab-complete profile names (both arguments)
 _aws_mfa_login() { compadd -- ${(f)"$(aws configure list-profiles 2>/dev/null)"}; }
-(( $+functions[compdef] )) && compdef _aws_mfa_login aws-mfa-login
+(( $+functions[compdef] )) && compdef _aws_mfa_login aws-mfa-login aws-mfa-logout
