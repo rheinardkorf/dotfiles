@@ -5,6 +5,8 @@
 #                        (fields + comments) of new or changed ones
 #   jira preview <key>   the ticket, its request fields and comments as Markdown,
 #                        from the cache
+#   jira search <words>  "<key>\t<snippet>" for cached tickets whose summary,
+#                        description, fields or comments contain all the words
 #
 # Config (.sources.jira in panel's config.json), all optional:
 #   site    Atlassian site for links (default: the one acli is logged in to)
@@ -171,8 +173,27 @@ preview() {
   ' $f
 }
 
+search() {
+  local -a files=( $items/*.json(N) )
+  (( $#files )) || return 0
+  jq -r --arg q "$1" '
+    # all the readable text of a ticket: rich text, plain and option field values
+    def texts: [.. | objects | select(.type == "text") | .text // empty]
+               + [.. | objects | .value? | strings]
+               + [.. | strings | select(test("\\s"))];
+    ($q | ascii_downcase | split(" ") | map(select(. != ""))) as $words
+    | ([.fields.summary] + (.fields | del(.comment) | texts) + (.fields.comment.comments // [] | map(.body) | texts)
+       | unique | join("  ") | gsub("\\s+"; " ")) as $text
+    | ($text | ascii_downcase) as $low
+    | select(all($words[]; . as $w | $low | contains($w)))
+    | ($low | index($words[0])) as $i
+    | ([$i - 40, 0] | max) as $from
+    | [.key, ($text[$from:$i + 70] | if $from > 0 then sub("^\\S*\\s"; "") else . end | gsub("\\t"; " "))] | @tsv' $files
+}
+
 case $1 in
   fetch)   fetch "$2" ;;
   preview) preview "$2" ;;
-  *)       print -u2 "usage: jira fetch <jql> | jira preview <key>"; exit 1 ;;
+  search)  search "$2" ;;
+  *)       print -u2 "usage: jira fetch <jql> | jira preview <key> | jira search <words>"; exit 1 ;;
 esac

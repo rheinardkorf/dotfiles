@@ -31,13 +31,16 @@
 #                            is the last good fetch (epoch).
 #   <source> preview <id>    print the preview of one item as Markdown, from the cache
 #                            only (panel renders it with glow)
+#   <source> search <words>  optional: "<id>\t<snippet>" for each cached item whose
+#                            content has all the words (used by alt-f)
 #
 # In a pane: an item is marked seen after the cursor rests on it (seen_after);
 # ● new, ◆ changed since you saw it.
 #   enter   full preview (glow pager)   ctrl-o  open in the browser
 #   alt-s   mark all seen               alt-u   mark this one unseen
-#   ctrl-r  fetch now                   esc     clear the filter
+#   ctrl-r  fetch now                   esc     clear the filter (or leave find)
 #   tab / shift-tab   next / previous view (panes with views)
+#   alt-f   find: search inside the items (cached details); esc or alt-f to go back
 emulate -L zsh
 setopt extendedglob pipefail
 zmodload zsh/system zsh/datetime
@@ -251,7 +254,22 @@ lines() {   # lines <pane> <pid>
     print -r -- $'\t'$'\e[2m'"$tabs"$'\e[0m'"waiting for the first fetch... (is 'panel fetcher' running?)"
     return
   fi
+  # find mode (alt-f): only items whose content has the words, with a snippet
+  local find="$PANEL_CACHE/panes/$1/find.$2" words="" matches=null
+  if [[ -f $find ]]; then
+    words="$(<$find)"
+    if [[ -z ${words//[[:space:]]/} ]]; then
+      print -r -- $'\t'$'\e[2m'"$tabs"$'\e[0m'"find: type words to search inside the items (esc to go back)"
+      return
+    fi
+    if ! matches="$(run_source $(pane_source $pane) search "$words" 2>/dev/null |
+                    jq -Rn '[inputs | split("\t") | {(.[0]): (.[1] // "")}] | add // {}')"; then
+      print -r -- $'\t'$'\e[2m'"$tabs"$'\e[0m'"find: this source can't search inside its items (esc to go back)"
+      return
+    fi
+  fi
   jq -r --arg src "$(pane_source $pane)" --argjson now $EPOCHSECONDS --arg tabs "$tabs" \
+    --argjson matches "$matches" --arg words "$words" \
     --argjson seen "$(seen_json)" --argjson m "$(cat $dir/meta.json 2>/dev/null || print '{}')" \
     "$JQ_STATE"'
     def hm: if . == null then "never" else strflocaltime("%H:%M") end;
@@ -264,7 +282,10 @@ lines() {   # lines <pane> <pid>
     "\u001b[2m" as $dim | "\u001b[1m" as $bold | "\u001b[0m" as $off |
     # key column: as wide as the longest key (max 30); none when no item has one
     ([.[] | .key // .id | length] | max // 0 | if . > 30 then 30 else . end) as $w |
-    ( "\t" + $dim + $tabs + $off + if $m.error then rgb("243;139;168") + "fetch failed at \($m.fetched_at | hm): \($m.error | split("\n")[0])  ·  showing \($m.ok_at | hm)" + $off
+    (if $matches then map(select($matches[.id] != null) | .title += "  " + $dim + "… " + $matches[.id] + " …" + $off) else . end) |
+    ( "\t" + $dim + $tabs + $off
+      + (if $matches then rgb("249;226;175") + "find \"\($words)\": \(length) match\(if length == 1 then "" else "es" end)  ·  " + $off else "" end)
+      + if $m.error then rgb("243;139;168") + "fetch failed at \($m.fetched_at | hm): \($m.error | split("\n")[0])  ·  showing \($m.ok_at | hm)" + $off
              else $dim + "fetched \($m.ok_at | hm)  ·  \(length) items  ·  ● new  ◆ changed" + $off end ),
     ( .[] | state($seen; $src) as $st
       | (if $st == "new" then rgb("250;179;135") + "●" + $off
@@ -302,7 +323,8 @@ preview() {
 # prompt <pane> <pid>: "Title › " or, with views, "Title › view › "
 prompt() {
   local title="$(conf --arg p $1 '.panes[$p].title // $p')" unit="$(cur_unit $1 $2)"
-  if [[ $unit == */* ]]; then print -r -- "$title › ${unit#*/} › "; else print -r -- "$title › "; fi
+  local find=""; [[ -f "$PANEL_CACHE/panes/$1/find.$2" ]] && find=$'\e[38;2;249;226;175;1m'"find › "$'\e[0m'
+  if [[ $unit == */* ]]; then print -r -- "$title › ${unit#*/} › $find"; else print -r -- "$title › $find"; fi
 }
 
 # switch_view <pane> <pid> <+1|-1>: show the next / previous view
@@ -316,6 +338,27 @@ switch_view() {
   print -r -- $views[i] > "$PANEL_CACHE/panes/$1/view.$2"
 }
 
+# toggle_find <pane> <pid>: switch find mode; prints the fzf actions to do it
+toggle_find() {
+  local f="$PANEL_CACHE/panes/$1/find.$2" redraw="transform-prompt($self _prompt $1 $2)+reload($self _lines $1 $2)"
+  local title="$(conf --arg p $1 '.panes[$p].title // $p' | tr -d '()')"
+  if [[ -f $f ]]; then
+    rm -f $f
+    print -r -- "unbind(change)+enable-search+clear-query+change-input-label()+$redraw"
+  else
+    : > $f
+    print -r -- "disable-search+clear-query+rebind(change)+change-input-label( find inside $title  ·  esc to go back )+$redraw"
+  fi
+}
+
+# esc_key <pane> <pid>: leave find mode, or else clear the query
+esc_key() {
+  if [[ -f "$PANEL_CACHE/panes/$1/find.$2" ]]; then toggle_find $1 $2; else print -r -- clear-query; fi
+}
+
+# find <pane> <pid> <words>: remember what to find, then list
+find_words() { print -r -- "$3" > "$PANEL_CACHE/panes/$1/find.$2"; lines $1 $2 }
+
 open_url() {   # open_url <unit> <id>
   local url="$(jq -r --arg id $2 '.[] | select(.id == $id) | .url // empty' "$PANEL_CACHE/panes/$1/items.json")"
   [[ -n $url ]] && open "$url"
@@ -328,24 +371,28 @@ view() {
   sock=$dir/fzf.$$.sock   # this view's own: a pane can be open more than once
   title="$(conf --arg p $pane '.panes[$p].title // $p')"
   [[ -n $TMUX_PANE ]] && tmux set-option -p -t $TMUX_PANE @panel_pane $pane
-  trap "rm -f $sock $dir/view.$$" EXIT
+  trap "rm -f $sock $dir/view.$$ $dir/find.$$" EXIT
   trap 'exit 0' HUP TERM
   # ctrl-c ends fzf and it starts again; close the pane with tmux (prefix x).
   while :; do
-    rm -f $sock
+    rm -f $sock $dir/find.$$   # (re)start in normal search
     # prompt first: with --track, fzf drops actions that come after a reload
     local me="$pane $$" redraw="transform-prompt($self _prompt $pane $$)+reload($self _lines $pane $$)"
     lines $pane $$ | fzf --ansi --listen=$sock --delimiter=$'\t' --with-nth=2 --id-nth=1 --track \
       --no-sort --header-lines=1 --layout=reverse --info=inline-right --prompt="$(prompt $pane $$)" \
+      --input-border=line --color='input-label:#f9e2af:bold' \
       --preview "$self _preview $pane {1}" \
       --preview-window 'right,60%,wrap,border-left,<110(down,65%,wrap,border-top)' \
       --bind "focus:execute-silent($self _focus $me {1})" \
-      --bind "esc:clear-query" \
+      --bind "esc:transform($self _esc $me)" \
       --bind "enter:execute($self _preview $pane {1} full)" \
       --bind "ctrl-o:execute-silent($self _open $me {1})" \
       --bind "ctrl-r:execute-silent($self _fetch_now $me >/dev/null 2>&1 &)" \
       --bind "alt-s:execute-silent($self _seen_all $me)+reload($self _lines $me)" \
       --bind "alt-u:execute-silent($self _unseen $me {1})+reload($self _lines $me)" \
+      --bind "start:unbind(change)" \
+      --bind "change:reload($self _find $me {q})" \
+      --bind "alt-f:transform($self _toggle_find $me)" \
       --bind "tab:execute-silent($self _view $me 1)+$redraw" \
       --bind "shift-tab:execute-silent($self _view $me -1)+$redraw"
     sleep 0.5
@@ -390,6 +437,9 @@ case $1 in
   view)      [[ -n $2 ]] || die "usage: panel view <pane>"; view $2 ;;
   _lines)    lines $2 $3 ;;
   _prompt)   prompt $2 $3 ;;
+  _toggle_find) toggle_find $2 $3 ;;
+  _esc)      esc_key $2 $3 ;;
+  _find)     find_words $2 $3 "$4" ;;
   _view)     switch_view $2 $3 $4 ;;
   _fetch_now) fetch_pane "$(cur_unit $2 $3)" ;;
   _preview)  preview $2 $3 $4 ;;
