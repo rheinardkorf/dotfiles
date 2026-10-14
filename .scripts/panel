@@ -18,6 +18,8 @@
 #            or {name: {source, views: [...], ...}}   one pane, several views (tab
 #                                                     switches); each view is the query,
 #                                                     or views: {view: query, ...}
+#            hidden_views: [view, ...]: not in the tab rotation, header or counts
+#                                       until alt-h reveals them (still fetched)
 #   layouts  {name: {window: [pane, ...]}}            one tmux window per context
 #   sources  {name: {...}}                            handed to the source script
 #            every: "5m", or per view: {"*": "5m", "dynamodb": "1h"} (* = the rest)
@@ -48,6 +50,7 @@
 #   ctrl-r  fetch now                   esc     clear the filter (or leave find)
 #   tab / shift-tab   next / previous view (panes with views)
 #   alt-f   find: search inside the items (cached details); esc or alt-f to go back
+#   alt-h   show / hide the pane's hidden views (cmd-shift-h via kitty)
 emulate -L zsh
 setopt extendedglob pipefail
 zmodload zsh/system zsh/datetime
@@ -95,9 +98,26 @@ pane_units() {   # pane_units <pane>
   local -a views=( ${(f)"$(pane_views $1)"} )
   if (( $#views )); then print -rl -- ${1}/${^views}; else print -r -- $1; fi
 }
+hidden_views() { conf --arg p "${1%%/*}" '.panes[$p].hidden_views // [] | .[]' }
+# visible_views <pane> [pid]: the views in rotation (hidden ones only when revealed)
+visible_views() {
+  local -a views=( ${(f)"$(pane_views $1)"} ) hidden=( ${(f)"$(hidden_views $1)"} )
+  if [[ -n $2 && -f "$PANEL_CACHE/panes/$1/reveal.$2" ]] || (( ! $#hidden )); then
+    print -rl -- $views
+  else
+    print -rl -- ${views:|hidden}
+  fi
+}
+
+# visible_units <pane>: its units without the hidden views (for counts)
+visible_units() {
+  local -a views=( ${(f)"$(visible_views $1)"} )
+  if (( $#views )); then print -rl -- ${1}/${^views}; else print -r -- $1; fi
+}
+
 # cur_unit <pane> <pid>: the unit an open view (fzf instance <pid>) is showing
 cur_unit() {
-  local -a views=( ${(f)"$(pane_views $1)"} )
+  local -a views=( ${(f)"$(visible_views $1 $2)"} )
   local v
   (( $#views )) || { print -r -- $1; return }
   v="$(cat "$PANEL_CACHE/panes/$1/view.$2" 2>/dev/null)"
@@ -256,7 +276,7 @@ update_window_name() {
   local base p n=0 c seen="$(seen_json)"
   base="$(tmux show-options -wqv -t $TMUX_PANE @panel_name)"
   [[ -n $base ]] || return 0
-  for p in ${(f)"$(tmux list-panes -t $TMUX_PANE -F '#{@panel_pane}' | while read -r q; do [[ -n $q ]] && pane_units $q; done)"}; do
+  for p in ${(f)"$(tmux list-panes -t $TMUX_PANE -F '#{@panel_pane}' | while read -r q; do [[ -n $q ]] && visible_units $q; done)"}; do
     [[ -f "$PANEL_CACHE/panes/$p/items.json" ]] || continue
     c="$(jq --arg src "$(pane_source $p)" --argjson seen "$seen" \
       "$JQ_STATE"' [.[] | select(state($seen; $src) != "seen")] | length' "$PANEL_CACHE/panes/$p/items.json")"
@@ -273,8 +293,10 @@ lines() {   # lines <pane> <pid>
   # views: all of them in the header, the one shown in bold
   if [[ $pane == */* ]]; then
     cur=${pane#*/}
-    for v in ${(f)"$(pane_views $1)"}; do
-      [[ $v == $cur ]] && tabs+=$'\e[0;1m'"$v"$'\e[0;2m  ' || tabs+="$v  "
+    local -a hidden=( ${(f)"$(hidden_views $1)"} )
+    for v in ${(f)"$(visible_views $1 $2)"}; do
+      local label=$v; (( ${hidden[(Ie)$v]} )) && label=$'\U000F0209'" $v"   # nf-md-eye_off
+      [[ $v == $cur ]] && tabs+=$'\e[0;1m'"$label"$'\e[0;2m  ' || tabs+="$label  "
     done
     tabs+="(tab)  ·  "
   fi
@@ -369,7 +391,7 @@ prompt() {
 
 # switch_view <pane> <pid> <+1|-1>: show the next / previous view
 switch_view() {
-  local -a views=( ${(f)"$(pane_views $1)"} )
+  local -a views=( ${(f)"$(visible_views $1 $2)"} )
   local cur i
   (( $#views )) || return 0
   cur="$(cur_unit $1 $2)"; cur=${cur#*/}
@@ -389,6 +411,13 @@ toggle_find() {
     : > $f
     print -r -- "disable-search+clear-query+rebind(change)+change-input-label( find inside $title  ·  esc to go back )+$redraw"
   fi
+}
+
+# toggle_reveal <pane> <pid>: show / hide hidden views; prints the fzf actions
+toggle_reveal() {
+  local f="$PANEL_CACHE/panes/$1/reveal.$2"
+  if [[ -f $f ]]; then rm -f $f; else : > $f; fi
+  print -r -- "transform-prompt($self _prompt $1 $2)+reload($self _lines $1 $2)"
 }
 
 # esc_key <pane> <pid>: leave find mode, or else clear the query
@@ -411,11 +440,11 @@ view() {
   sock=$dir/fzf.$$.sock   # this view's own: a pane can be open more than once
   title="$(conf --arg p $pane '.panes[$p].title // $p')"
   [[ -n $TMUX_PANE ]] && tmux set-option -p -t $TMUX_PANE @panel_pane $pane
-  trap "rm -f $sock $dir/view.$$ $dir/find.$$" EXIT
+  trap "rm -f $sock $dir/view.$$ $dir/find.$$ $dir/reveal.$$" EXIT
   trap 'exit 0' HUP TERM
   # ctrl-c ends fzf and it starts again; close the pane with tmux (prefix x).
   while :; do
-    rm -f $sock $dir/find.$$   # (re)start in normal search
+    rm -f $sock $dir/find.$$ $dir/reveal.$$   # (re)start in normal search, hidden views hidden
     # prompt first: with --track, fzf drops actions that come after a reload
     local me="$pane $$" redraw="transform-prompt($self _prompt $pane $$)+reload($self _lines $pane $$)"
     lines $pane $$ | fzf --ansi --listen=$sock --delimiter=$'\t' --with-nth=2 --id-nth=1 --track \
@@ -433,6 +462,7 @@ view() {
       --bind "start:unbind(change)" \
       --bind "change:reload($self _find $me {q})" \
       --bind "alt-f:transform($self _toggle_find $me)" \
+      --bind "alt-h:transform($self _reveal $me)" \
       --bind "tab:execute-silent($self _view $me 1)+$redraw" \
       --bind "shift-tab:execute-silent($self _view $me -1)+$redraw"
     sleep 0.5
@@ -479,6 +509,7 @@ case $1 in
   _prompt)   prompt $2 $3 ;;
   _toggle_find) toggle_find $2 $3 ;;
   _esc)      esc_key $2 $3 ;;
+  _reveal)   toggle_reveal $2 $3 ;;
   _find)     find_words $2 $3 "$4" ;;
   _view)     switch_view $2 $3 $4 ;;
   _fetch_now) fetch_pane "$(cur_unit $2 $3)" ;;

@@ -27,10 +27,14 @@
       "source": "github",
       "views": {
         "actions": "actions",
+        // per person across orgs (sources.github.contributions)
+        "contributions": "contributions",
         "my-prs": "is:open is:pr author:@me archived:false sort:updated-desc",
         "review-requests": "is:open is:pr review-requested:@me archived:false sort:updated-desc"
       },
-      "every": "5m"
+      // people's contributions: off screen until alt-h reveals it
+      "hidden_views": ["contributions"],
+      "every": {"*": "5m", "contributions": "6h"}
     },
     // Google Calendar via gog (read-only): today and the next 7 days
     "calendar": {
