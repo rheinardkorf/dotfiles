@@ -37,6 +37,7 @@
 emulate -L zsh
 setopt extendedglob pipefail
 zmodload zsh/system zsh/datetime
+zmodload -F zsh/stat b:zstat
 path=(/opt/homebrew/bin $path)
 
 PANEL_CONFIG_DIR="${PANEL_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/panel}"
@@ -121,6 +122,11 @@ fetch_pane() {
 layout_panes() { conf --arg l "$1" '[.layouts[$l] // {} | .[][]] | unique | .[]' }
 default_layout() { conf '.layouts | keys_unsorted[0] // empty' }
 
+# Long-running loops (fetcher, view) start again when panel itself changes, so
+# they never keep running old code.
+loaded="$(zstat +mtime $self)"
+changed() { [[ "$(zstat +mtime $self 2>/dev/null)" != $loaded ]] }
+
 fetcher() {
   local layout=${1:-$(default_layout)} pane every last
   print "panel: fetching panes of layout '$layout' when due (ctrl-c stops)"
@@ -134,6 +140,7 @@ fetcher() {
       jq -r 'if .error then "failed: " + .error else "ok" end' "$PANEL_CACHE/panes/$pane/meta.json"
     done
     sleep 15
+    changed && { print "panel changed: restarting"; exec $self fetcher $layout }
   done
 }
 
@@ -282,6 +289,7 @@ view() {
       --bind "alt-s:execute-silent($self _seen_all $pane)+reload($self _lines $pane)" \
       --bind "alt-u:execute-silent($self _unseen $pane {1})+reload($self _lines $pane)"
     sleep 0.5
+    changed && exec $self view $pane
   done
 }
 
