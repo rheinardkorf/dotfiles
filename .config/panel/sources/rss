@@ -1,0 +1,379 @@
+#!/usr/bin/env python3
+"""panel source: RSS and Atom feeds.
+
+    rss fetch '<feeds>'     the articles of these feeds, newest first
+    rss preview <id>        an article as Markdown (from the feed, cached)
+    rss search <words>      "<id>\t<snippet>" for cached articles whose title or
+                            summary has all the words
+
+The query is the pane's (or view's) list of feeds, as JSON: URLs, or
+{"url": ..., "name": ...} to choose the short name shown in the list. A pane
+with views makes each view a category:
+
+    "views": {"tech": ["https://lobste.rs/rss", ...], "security": [...]}
+
+Feeds are fetched in parallel with conditional requests (ETag / Last-Modified),
+so an unchanged feed costs almost nothing. Only the feeds are read, never the
+article pages. Each feed keeps its last 50 articles (at most 30 days old).
+Every article is new (●) until you've looked at it.
+
+Images: each new article's picture is saved in the cache (as JPEG, at most
+800px, through macOS sips), from the feed's media tags or enclosure, else the
+first image in its text, else the article page's og:image (the one time a page
+is read: its head, once per article). The preview starts with
+"<!-- panel:image <path> -->" for panel to draw it.
+"""
+import subprocess
+import concurrent.futures
+import email.utils
+import hashlib
+import html
+import html.parser
+import json
+import os
+import re
+import sys
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+import xml.etree.ElementTree as ET
+from datetime import datetime, timezone
+
+CACHE = os.environ.get("PANEL_SOURCE_CACHE") or sys.exit("rss: run me through panel")
+FEEDS = os.path.join(CACHE, "feeds")
+KEEP, KEEP_DAYS = 50, 30
+IMAGES = os.path.join(CACHE, "images")
+IMAGE_JOBS = 60          # at most this many image lookups per fetch (the rest wait)
+IMAGE_MAX = 8_000_000    # bytes
+UA = "panel-rss/1.0 (+https://github.com/rheinardkorf/dotfiles)"
+
+NS = {"atom": "http://www.w3.org/2005/Atom", "content": "http://purl.org/rss/1.0/modules/content/",
+      "dc": "http://purl.org/dc/elements/1.1/", "rss1": "http://purl.org/rss/1.0/",
+      "media": "http://search.yahoo.com/mrss/"}
+IMG_SRC = re.compile(r"<img[^>]+src=[\"']([^\"']+)", re.I)
+
+
+def image_of(e, body):
+    """An entry's picture: media tags or an image enclosure, else the first <img> in its text."""
+    for el in e.iter():
+        tag = el.tag.split("}")[-1]
+        url, typ = el.get("url") or el.get("href"), (el.get("type") or "")
+        if not url:
+            continue
+        if tag == "thumbnail" or (tag == "content" and (el.get("medium") == "image" or typ.startswith("image/"))):
+            return url
+        if (tag == "enclosure" or (tag == "link" and el.get("rel") == "enclosure")) and typ.startswith("image/"):
+            return url
+    m = IMG_SRC.search(body or "")
+    return html.unescape(m[1]) if m else None
+
+
+def sha(s, n=16):
+    return hashlib.sha1(s.encode()).hexdigest()[:n]
+
+
+def epoch(s):
+    """RFC 822 (RSS) or ISO 8601 (Atom) -> epoch seconds, or None."""
+    if not s:
+        return None
+    s = s.strip()
+    try:
+        return int(email.utils.parsedate_to_datetime(s).timestamp())
+    except (TypeError, ValueError, IndexError):
+        pass
+    try:
+        d = datetime.fromisoformat(s.replace("Z", "+00:00"))
+        return int((d if d.tzinfo else d.replace(tzinfo=timezone.utc)).timestamp())
+    except ValueError:
+        return None
+
+
+def text(el):
+    return (el.text or "").strip() if el is not None else ""
+
+
+def parse(data):
+    """Feed bytes -> (title, [entries]); entries: {id, title, link, published, author, summary}."""
+    root = ET.fromstring(data)
+    tag = root.tag.split("}")[-1]
+    entries = []
+    if tag == "feed":   # Atom
+        title = text(root.find("atom:title", NS))
+        for e in root.findall("atom:entry", NS):
+            link = next((l.get("href") for l in e.findall("atom:link", NS) if l.get("rel", "alternate") == "alternate"), None)
+            content = e.find("atom:content", NS)
+            if content is None:
+                content = e.find("atom:summary", NS)
+            entries.append({"id": text(e.find("atom:id", NS)) or link, "title": text(e.find("atom:title", NS)), "link": link,
+                            "published": epoch(text(e.find("atom:published", NS)) or text(e.find("atom:updated", NS))),
+                            "author": text(e.find("atom:author/atom:name", NS)), "summary": text(content),
+                            "image_url": image_of(e, text(content))})
+    else:               # RSS 2.0 (channel/item) or RSS 1.0 (rdf:RDF/item)
+        channel = root.find("channel")
+        title = text(channel.find("title")) if channel is not None else text(root.find("rss1:channel/rss1:title", NS))
+        items = (channel.findall("item") if channel is not None else []) or root.findall("rss1:item", NS)
+        for e in items:
+            def f(name):
+                return e.find(name) if e.find(name) is not None else e.find(f"rss1:{name}", NS)
+            link = text(f("link"))
+            body = text(e.find("content:encoded", NS)) or text(f("description"))
+            entries.append({"id": text(e.find("guid")) or link or text(f("title")), "title": text(f("title")), "link": link,
+                            "published": epoch(text(e.find("pubDate")) or text(e.find("dc:date", NS))),
+                            "author": text(e.find("dc:creator", NS)) or text(e.find("author")), "summary": body,
+                            "image_url": image_of(e, body)})
+    return title, entries
+
+
+def feed_file(url):
+    return os.path.join(FEEDS, sha(url) + ".json")
+
+
+def load(path, default):
+    try:
+        with open(path) as fh:
+            return json.load(fh)
+    except Exception:
+        return default
+
+
+def save(path, data):
+    tmp = path + ".tmp"
+    with open(tmp, "w") as fh:
+        json.dump(data, fh)
+    os.replace(tmp, path)
+
+
+def update(feed):
+    """Fetch one feed (conditionally) and merge its entries into its cache file."""
+    url, now = feed["url"], int(time.time())
+    path = feed_file(url)
+    st = load(path, {"url": url, "articles": {}, "first_fetch": None})
+    req = urllib.request.Request(url, headers={"User-Agent": UA, "Accept": "application/rss+xml, application/atom+xml, application/xml, text/xml, */*"})
+    if st.get("etag"):
+        req.add_header("If-None-Match", st["etag"])
+    if st.get("modified"):
+        req.add_header("If-Modified-Since", st["modified"])
+    try:
+        with urllib.request.urlopen(req, timeout=20) as r:
+            data, etag, modified = r.read(), r.headers.get("ETag"), r.headers.get("Last-Modified")
+    except urllib.error.HTTPError as e:
+        if e.code == 304:   # unchanged
+            st["checked"] = now
+            save(path, st)
+            return st, None
+        return st, f"{feed.get('name') or url}: HTTP {e.code}"
+    except Exception as e:
+        return st, f"{feed.get('name') or url}: {getattr(e, 'reason', e)}"
+    try:
+        title, entries = parse(data)
+    except ET.ParseError as e:
+        return st, f"{feed.get('name') or url}: not a feed ({e})"
+    st.update(title=title, etag=etag, modified=modified, checked=now)
+    arts = st["articles"]
+    for e in entries:
+        if not e["id"]:
+            continue
+        aid = sha(url + "\n" + e["id"])
+        old = arts.get(aid, {})
+        e["first_seen"] = old.get("first_seen", now)
+        for k in ("image", "image_tried"):   # found (or looked for) once, kept
+            if k in old:
+                e[k] = old[k]
+        e["summary"] = e["summary"][:20000]
+        arts[aid] = e
+    # keep the newest KEEP, none older than KEEP_DAYS
+    cutoff = now - KEEP_DAYS * 86400
+    keep = sorted(arts.items(), key=lambda kv: -(kv[1].get("published") or kv[1]["first_seen"]))
+    st["articles"] = dict(kv for kv in keep[:KEEP] if (kv[1].get("published") or kv[1]["first_seen"]) >= cutoff)
+    save(path, st)
+    return st, None
+
+
+def short(title, url):
+    t = re.split(r"\s+[-–—|:]\s+", title or "")[0].strip() or re.sub(r"^www\.", "", urllib.parse.urlparse(url).netloc)
+    return t.lower()[:22]
+
+
+OG = re.compile(r"""<meta[^>]+(?:property|name)=["'](?:og:image|twitter:image)(?::src)?["'][^>]*>""", re.I)
+CONTENT = re.compile(r"""content=["']([^"']+)""", re.I)
+
+
+def get(url, limit):
+    req = urllib.request.Request(url, headers={"User-Agent": UA})
+    with urllib.request.urlopen(req, timeout=15) as r:
+        return r.read(limit + 1), r.geturl()
+
+
+def find_image(job):
+    """(feed path, article id, image url or None, article link, text) -> saved jpg path or None."""
+    path, aid, url, link, body = job
+    try:
+        if not url:   # the article's own text (articles cached before images were kept)
+            m = IMG_SRC.search(body or "")
+            url = html.unescape(m[1]) if m else None
+        if not url and link:   # the page's og:image: only its head is read
+            page, final = get(link, 300_000)
+            m = OG.search(page.decode("utf-8", "replace"))
+            c = CONTENT.search(m[0]) if m else None
+            url = urllib.parse.urljoin(final, html.unescape(c[1])) if c else None
+        if not url:
+            return None
+        data, _ = get(urllib.parse.urljoin(link or "", url), IMAGE_MAX)
+        if len(data) > IMAGE_MAX:
+            return None
+        raw, jpg = os.path.join(IMAGES, aid + ".raw"), os.path.join(IMAGES, aid + ".jpg")
+        with open(raw, "wb") as fh:
+            fh.write(data)
+        ok = subprocess.run(["sips", "-s", "format", "jpeg", "-s", "formatOptions", "80", "-Z", "800", raw, "--out", jpg],
+                            capture_output=True, timeout=30).returncode == 0
+        os.unlink(raw)
+        return jpg if ok and os.path.exists(jpg) else None
+    except Exception:
+        return None
+
+
+def images(paths):
+    """Look up pictures for articles that haven't been tried, then drop unused ones."""
+    os.makedirs(IMAGES, exist_ok=True)
+    jobs = []
+    for path in paths:
+        st = load(path, {})
+        for aid, a in st.get("articles", {}).items():
+            if not a.get("image_tried"):
+                jobs.append((path, aid, a.get("image_url"), a.get("link"), a.get("summary")))
+    jobs.sort(key=lambda j: j[2] is None)   # cheap ones (url known) first
+    jobs = jobs[:IMAGE_JOBS]
+    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
+        found = list(pool.map(find_image, jobs))
+    by_path = {}
+    for (path, aid, _, _, _), png in zip(jobs, found):
+        by_path.setdefault(path, {})[aid] = png
+    for path, res in by_path.items():
+        st = load(path, {})
+        for aid, png in res.items():
+            if aid in st.get("articles", {}):
+                st["articles"][aid].update(image_tried=True, image=png)
+        save(path, st)
+    # drop pictures no feed (in any view) still has an article for
+    used = {a.get("image") for f in all_feeds() for a in load(f, {}).get("articles", {}).values()}
+    for name in os.listdir(IMAGES):
+        if os.path.join(IMAGES, name) not in used:
+            os.unlink(os.path.join(IMAGES, name))
+
+
+def all_feeds():
+    return [os.path.join(FEEDS, n) for n in os.listdir(FEEDS)] if os.path.isdir(FEEDS) else []
+
+
+def fetch(query):
+    try:
+        feeds = json.loads(query) if query.strip() else []
+    except json.JSONDecodeError:
+        feeds = [query.strip()]
+    feeds = [f if isinstance(f, dict) else {"url": f} for f in feeds if f]
+    if not feeds:
+        sys.exit("rss: no feeds configured for this view (put them in config.local.json)")
+    os.makedirs(FEEDS, exist_ok=True)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
+        results = list(pool.map(update, feeds))
+    errors = [err for _, err in results if err]
+    images([feed_file(f["url"]) for f in feeds])
+    results = [(load(feed_file(f["url"]), st), err) for f, (st, err) in zip(feeds, results)]
+    items = []
+    for feed, (st, _) in zip(feeds, results):
+        name = feed.get("name") or short(st.get("title"), feed["url"])
+        for aid, a in st.get("articles", {}).items():
+            when = a.get("published") or a["first_seen"]
+            # updated never changes: an article is new until looked at, then seen for good
+            items.append({"id": aid, "key": "", "status": name, "title": html.unescape(a["title"] or "(untitled)"),
+                          "url": a.get("link"), "updated": when})
+    for err in errors:
+        print(err, file=sys.stderr)
+    if errors and len(errors) == len(feeds):
+        sys.exit(1)
+    items.sort(key=lambda i: -i["updated"])
+    json.dump(items, sys.stdout)
+
+
+class Text(html.parser.HTMLParser):
+    """HTML -> plain text with paragraphs, list items and link targets."""
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.out, self.href = [], None
+
+    def handle_starttag(self, tag, attrs):
+        if tag in ("p", "div", "br", "h1", "h2", "h3", "h4", "blockquote", "tr"):
+            self.out.append("\n\n" if tag != "br" else "\n")
+        elif tag == "li":
+            self.out.append("\n- ")
+        elif tag == "a":
+            self.href = dict(attrs).get("href")
+
+    def handle_endtag(self, tag):
+        if tag == "a":
+            self.href = None
+
+    def handle_data(self, data):
+        self.out.append(data)
+        if self.href and data.strip() and self.href not in data:
+            self.out.append(f" ({self.href})")
+            self.href = None
+
+    def result(self):
+        s = re.sub(r"[ \t]+", " ", "".join(self.out))
+        return re.sub(r"\n\s*\n\s*(\n\s*)+", "\n\n", s).strip()
+
+
+def plain(s):
+    p = Text()
+    p.feed(s or "")
+    return p.result()
+
+
+def articles():
+    for name in os.listdir(FEEDS) if os.path.isdir(FEEDS) else []:
+        st = load(os.path.join(FEEDS, name), {})
+        for aid, a in st.get("articles", {}).items():
+            yield aid, a, st
+
+
+def preview(aid):
+    for i, a, st in articles():
+        if i == aid:
+            when = a.get("published") or a["first_seen"]
+            if a.get("image") and os.path.exists(a["image"]):
+                print(f"<!-- panel:image {a['image']} -->")
+            print(f"# {html.unescape(a['title'] or '(untitled)')}\n")
+            by = f" · {a['author']}" if a.get("author") else ""
+            print(f"**{st.get('title') or st['url']}**{by} · {time.strftime('%a %-d %b %H:%M', time.localtime(when))}  ")
+            if a.get("link"):
+                print(f"{a['link']}\n")
+            body = plain(a.get("summary"))
+            print(body[:6000] + ("…" if len(body) > 6000 else "") if body else "_No summary in the feed: ctrl-o opens the article._")
+            return
+    print("This article is no longer in the cache.")
+
+
+def search(words):
+    words = [w for w in words.lower().split() if w]
+    for aid, a, _ in articles():
+        txt = re.sub(r"\s+", " ", f"{a['title']}  {plain(a.get('summary'))}")
+        low = txt.lower()
+        if words and all(w in low for w in words):
+            i = low.index(words[0])
+            print(f"{aid}\t{txt[max(0, i - 40):i + 70]}".replace("\n", " "))
+
+
+if __name__ == "__main__":
+    cmd = sys.argv[1] if len(sys.argv) > 1 else ""
+    arg = sys.argv[2] if len(sys.argv) > 2 else ""
+    if cmd == "fetch":
+        fetch(arg)
+    elif cmd == "preview":
+        preview(arg)
+    elif cmd == "search":
+        search(arg)
+    else:
+        sys.exit("usage: rss fetch '<feeds json>' | rss preview <id> | rss search <words>")

@@ -70,6 +70,19 @@
       "every": "15s"
     },
 
+    // RSS: each view is a category; the feeds themselves live in config.local.json
+    // (panes.rss.views: {"tech": [urls...], ...})
+    "rss": {
+      "title": "RSS",
+      "source": "rss",
+      "every": "30m",
+      // side by side at any width: a narrow list of titles, the article beside it
+      "preview": "side",
+      "list": "title",
+      // unread articles aren't worth a ●N in the window name
+      "count": false
+    },
+
     // AWS prod, one pane with views (tab switches): alarms, CloudFormation stacks, DynamoDB tables, SQS queues
     "aws": {
       "title": "Prod",
@@ -86,7 +99,8 @@
       "github": ["github"],
       "aws": ["aws"],
       "calendar": ["calendar"],
-      "agents": ["agents"]
+      "agents": ["agents"],
+      "rss": ["rss"]
     }
   }
 }

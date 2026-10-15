@@ -37,7 +37,12 @@ top. JSON, with full-line `//` comments allowed. See `config.example.json`.
 
 - **panes**: a source plus either one `query`, or several `views` (a list of
   names, or `{name: query}`). Each pane also has `every` (one interval, or one
-  per view, e.g. `{"*": "5m", "dynamodb": "1h"}`) and optional `hidden_views`.
+  per view, e.g. `{"*": "5m", "dynamodb": "1h"}`), optional `hidden_views`,
+  and `preview` (`"side"`: a narrow list with the preview beside it at any
+  width, as rss does; by default the preview sits beside the list only when it
+  gets 110 columns, so most windows stack). `"list": "title"` shows rows as just the
+  title and its age, and `"count": false` keeps a pane out of its window's ●N
+  (rss does both).
 - **layouts**: windows mapped to panes. `panel up <layout>` builds them.
 - **sources**: settings handed to each source script (profiles, orgs,
   exclusions, field labels, …).
@@ -86,6 +91,13 @@ internally:
   changes), SQS queues (dead-letter queues with messages first).
 - **calendar** (gog, always `--readonly`): today and the next days, with a
   countdown and RSVP state.
+- **rss** (Python, standard library): RSS and Atom feeds; each view is a
+  category whose query is its list of feeds (`config.local.json`, since a
+  feed list is personal). Conditional requests (ETag / Last-Modified), feeds
+  in parallel, the last 50 articles per feed; every article is new (●) until
+  you've looked at it. Each article's picture is cached at fetch time (media tags or
+  enclosure, else the first image in its text, else the page's og:image),
+  as a small JPEG, and drawn above the preview with kitty's graphics protocol.
 - **agents** (local files): every running Claude Code session from
   `~/.claude/sessions/<pid>.json` (name, folder, busy / idle, tmux pane), with
   the title, last prompt and reply from its transcript, and this turn's
@@ -123,6 +135,9 @@ internally:
 - **Live refresh**: each open view has its own socket (`fzf.<pid>.sock`).
   After a fetch, the fetcher sends "reload" to every open view of that pane;
   the list updates without moving the cursor.
+- **Images**: a preview starting with `<!-- panel:image <path> -->` gets that
+  picture drawn above the text (`kitten icat` with unicode placeholders, which
+  pass through tmux and fzf; needs `allow-passthrough on`).
 - **Preview**: fzf calls `panel _preview`, which runs the source's `preview`
   and renders the Markdown with glow (glow's own style, e.g. Catppuccin).
   Enter opens the same preview full-screen in glow's pager.

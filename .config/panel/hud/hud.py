@@ -212,6 +212,8 @@ def phrase(f, now):
         return f"{busy} busy" + (f" · {waiting} awaiting you" if waiting else "")
     if src == "calendar":
         return f"next: {clean(nxt['title'])} in {dur(nxt['at'] - now)}" if nxt else "clear"
+    if src == "rss":
+        return f"{f['unseen']} new in {view or 'feeds'}" if f["unseen"] else f"{n} in {view or 'feeds'}"
     table = {
         ("jira", "assigned"): f"{n} assigned",
         ("jira", "mentioned"): f"{f['unseen']} new mentions" if f["unseen"] else None,
@@ -228,7 +230,7 @@ def phrase(f, now):
     return f"{n} {view or 'items'}" + (f" · {f['unseen']} new" if f["unseen"] else "")
 
 
-WORD = {"jira": "linked", "github": "linked", "aws": "nominal", "calendar": "synced"}
+WORD = {"jira": "linked", "github": "linked", "aws": "nominal", "calendar": "synced", "rss": "synced"}
 
 
 def systems(units, now):
@@ -334,6 +336,15 @@ def briefing(job, units, now):
     if cal and cal["next"]["at"] - now < 4 * 3600:
         title, d = clean(cal["next"]["title"]), dur(cal["next"]["at"] - now, True)
         lines.append(one(f"{title} starts in {d}.", f"You have {title} in {d}.", f"{title} is coming up in {d}."))
+    # new articles, per category (view) of the rss pane
+    reads = [(f["view"] or "your feeds", f["unseen"]) for f in units if f["source"] == "rss" and not f["missing"] and not f["hidden"] and f["unseen"]]
+    if len(reads) == 1:
+        v, n = reads[0]
+        lines.append(one(f"{cap(count_words(n, 'new article'))} in {v}.", f"{cap(v)} has {count_words(n, 'new read')}.",
+                         f"{cap(count_words(n, 'new story', 'new stories'))} in {v}."))
+    elif reads:
+        parts = [f"{count_words(n, 'new article') if i == 0 else WORDS[n] if n < len(WORDS) else n} in {v}" for i, (v, n) in enumerate(reads)]
+        lines.append(one(f"There are {', '.join(parts[:-1])} and {parts[-1]}.", f"New reading: {', '.join(parts[:-1])} and {parts[-1]}."))
     if not issues and len(lines) <= 2:
         lines.append(one("All systems nominal.", "Nothing needs your attention.", "Everything is running smoothly."))
     lines.append(one("Standing by.", "I'll keep an eye on things.", "At your service.", "Standing by, as always.",

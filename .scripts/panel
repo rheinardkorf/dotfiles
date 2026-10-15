@@ -24,6 +24,13 @@
 #            or {name: {source, views: [...], ...}}   one pane, several views (tab
 #                                                     switches); each view is the query,
 #                                                     or views: {view: query, ...}
+#            preview: "side" keeps the preview beside the list at any width (a
+#                     narrower list, e.g. for reading), or any fzf --preview-window
+#                     spec. Default: right, but under the list unless the preview
+#                     would be 110 columns wide (so stacked in most windows)
+#            count: false leaves the pane out of its window's ●N
+#            list: "title" shows rows as the title, then its age (no key, status
+#                  or spark columns), e.g. for reading
 #            or {name: {type: "hud", title}}          the assistant HUD as a window
 #            hidden_views: [view, ...]: not in the tab rotation, header or counts
 #                                       until alt-h reveals them (still fetched)
@@ -76,7 +83,7 @@ emulate -L zsh
 setopt extendedglob pipefail
 zmodload zsh/system zsh/datetime
 zmodload -F zsh/stat b:zstat
-path=(/opt/homebrew/bin $path)
+path=(/opt/homebrew/bin /Applications/kitty.app/Contents/MacOS $path)   # kitten: images
 
 PANEL_CONFIG_DIR="${PANEL_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/panel}"
 PANEL_CACHE="${PANEL_CACHE:-${XDG_CACHE_HOME:-$HOME/.cache}/panel}"
@@ -94,9 +101,16 @@ conf() {
   [[ -n $machine ]] || die "no machine name: put one in $name_file (or set PANEL_MACHINE)"
   f="$PANEL_CONFIG_DIR/config.$machine.json"
   [[ -f $f ]] || die "no config for \"$machine\": $f (see config.example.json)"
-  for f in $f $PANEL_CONFIG_DIR/config.local.json(N); do
-    sed -E '/^[[:space:]]*\/\//d' $f
-  done | jq -s 'reduce .[] as $c ({}; . * $c)' | jq -r "$@"
+  # merged once into the cache, again only when a config file changes: a view
+  # switch asks dozens of questions, and merging each time made it sluggish
+  local merged="$PANEL_CACHE/config.$machine.json" src
+  local -a files=( $f $PANEL_CONFIG_DIR/config.local.json(N) )
+  if [[ ! -s $merged || $f -nt $merged || ( -n $files[2] && $files[2] -nt $merged ) ]]; then
+    mkdir -p $PANEL_CACHE
+    for src in $files; do sed -E '/^[[:space:]]*\/\//d' $src; done |
+      jq -s 'reduce .[] as $c ({}; . * $c)' > $merged.$$ && mv $merged.$$ $merged || { rm -f $merged.$$; return 1 }
+  fi
+  jq -r "$@" $merged
 }
 
 seconds() {   # 30s / 2m / 1h -> seconds
@@ -109,17 +123,47 @@ seconds() {   # 30s / 2m / 1h -> seconds
   esac
 }
 
-pane_source() { conf --arg p "${1%%/*}" '.panes[$p].source // empty' }
+# One pane's settings, loaded once per run (load_pane) and read from memory after:
+# a view switch asks about the same pane many times, and each jq costs ~10 ms.
+typeset -g LOADED_PANE="" P_SOURCE="" P_TITLE="" P_LIST="" P_PREVIEW="" P_COUNT=""
+typeset -ga P_VIEWS P_HIDDEN
+load_pane() {
+  local -a f
+  f=( "${(@f)$(conf --arg p "${1%%/*}" '.panes[$p] // {} | [.source // "", .title // $p,
+      (.views // [] | if type == "object" then keys_unsorted else . end | join("\u001f")),
+      (.hidden_views // [] | join("\u001f")), .list // "", .preview // "", (.count != false | tostring)] | .[]')}" )
+  LOADED_PANE=${1%%/*} P_SOURCE=$f[1] P_TITLE=$f[2] P_LIST=$f[5] P_PREVIEW=$f[6] P_COUNT=$f[7]
+  P_VIEWS=( ${(ps:\x1f:)f[3]} ) P_HIDDEN=( ${(ps:\x1f:)f[4]} )
+}
+# pane_counts <pane>: does it add to its window's ●N? ("count": false says no)
+pane_counts() {
+  if [[ ${1%%/*} == $LOADED_PANE && -n $LOADED_PANE ]]; then [[ $P_COUNT == true ]]
+  else [[ "$(conf --arg p "${1%%/*}" '.panes[$p].count != false')" == true ]]; fi
+}
+pane_title() {
+  if [[ $1 == $LOADED_PANE && -n $LOADED_PANE ]]; then print -r -- $P_TITLE
+  else conf --arg p $1 '.panes[$p].title // $p'; fi
+}
+pane_source() {
+  if [[ ${1%%/*} == $LOADED_PANE && -n $LOADED_PANE ]]; then print -r -- $P_SOURCE
+  else conf --arg p "${1%%/*}" '.panes[$p].source // empty'; fi
+}
 
 # A unit is what gets fetched, cached and listed: a pane, or one of its views
 # (pane/view) when the pane has "views" (e.g. aws/alarms, aws/cloudformation).
 # views: ["a", "b"] (each name is also the query) or {"a": "query", ...}
-pane_views() { conf --arg p "${1%%/*}" '.panes[$p].views // [] | if type == "object" then keys_unsorted[] else .[] end' }
+pane_views() {
+  if [[ ${1%%/*} == $LOADED_PANE && -n $LOADED_PANE ]]; then (( $#P_VIEWS )) && print -rl -- $P_VIEWS
+  else conf --arg p "${1%%/*}" '.panes[$p].views // [] | if type == "object" then keys_unsorted[] else .[] end'; fi
+}
 pane_units() {   # pane_units <pane>
   local -a views=( ${(f)"$(pane_views $1)"} )
   if (( $#views )); then print -rl -- ${1}/${^views}; else print -r -- $1; fi
 }
-hidden_views() { conf --arg p "${1%%/*}" '.panes[$p].hidden_views // [] | .[]' }
+hidden_views() {
+  if [[ ${1%%/*} == $LOADED_PANE && -n $LOADED_PANE ]]; then (( $#P_HIDDEN )) && print -rl -- $P_HIDDEN
+  else conf --arg p "${1%%/*}" '.panes[$p].hidden_views // [] | .[]'; fi
+}
 # visible_views <pane> [pid]: the views in rotation (hidden ones only when revealed)
 visible_views() {
   local -a views=( ${(f)"$(pane_views $1)"} ) hidden=( ${(f)"$(hidden_views $1)"} )
@@ -320,7 +364,7 @@ update_window_name() {
   base="$(tmux show-options -wqv -t $TMUX_PANE @panel_name)"
   [[ -n $base ]] || return 0
   for p in ${(f)"$(tmux list-panes -t $TMUX_PANE -F '#{@panel_pane}' | while read -r q; do [[ -n $q ]] && visible_units $q; done)"}; do
-    [[ -f "$PANEL_CACHE/panes/$p/items.json" ]] || continue
+    [[ -f "$PANEL_CACHE/panes/$p/items.json" ]] && pane_counts $p || continue
     c="$(jq --arg src "$(pane_source $p)" --argjson seen "$seen" \
       "$JQ_STATE"' [.[] | select(state($seen; $src) != "seen")] | length' "$PANEL_CACHE/panes/$p/items.json")"
     (( n += c ))
@@ -361,7 +405,14 @@ lines() {   # lines <pane> <pid>
       return
     fi
   fi
+  # title rows: shorten titles to the list's width (fzf tells reloads how wide it
+  # is), so the age at the end always shows
+  local width=0
+  if [[ $P_LIST == title && -n $FZF_COLUMNS ]]; then
+    width=$FZF_COLUMNS; [[ $P_PREVIEW == side ]] && width=$(( FZF_COLUMNS * 30 / 100 ))
+  fi
   jq -r --arg src "$(pane_source $pane)" --argjson now $EPOCHSECONDS --arg tabs "$tabs" \
+    --arg list "$P_LIST" --argjson width $width \
     --argjson matches "$matches" --arg words "$words" \
     --argjson seen "$(seen_json)" --argjson m "$(cat $dir/meta.json 2>/dev/null || print '{}')" \
     "$JQ_STATE"'
@@ -396,7 +447,13 @@ lines() {   # lines <pane> <pid>
     ( .[] | state($seen; $src) as $st
       | ($palette[.mark_color // ""] // (if $st == "new" then $palette.o else $palette.y end)) as $mc
       | (if $st == "seen" then " " else rgb($mc) + (.mark // (if $st == "new" then "●" else "◆" end)) + $off end) as $mark
-      | "\(.id)\t\($mark) \(if $w > 0 then $bold + (.key // .id | pad($w + 2)) + $off + " " else "" end)\(if $palette[.status_color // ""] then $off + rgb($palette[.status_color]) else $dim end)\(.status // "" | pad($sw + 1))\($off)\($dim) \(.at // .updated | age | pad(7))\($off) \(if $kw > 0 then spark + "  " else "" end)\(.title // "" | sub("^\\s+"; ""))" )
+      | if $list == "title" then
+          (.at // .updated | age) as $a | (.title // "" | sub("^\\s+"; "")) as $t
+          | (if $width > 0 then $width - ($a | length) - 9 else 1000 end) as $tw
+          # shortened or padded to the same width, so the ages line up
+          | "\(.id)\t\($mark) \(if ($t | length) > $tw then $t[0:$tw - 1] + "…" elif $width > 0 then $t + " " * ($tw - ($t | length)) else $t end)  \($dim)\($a)\($off)"
+        else
+        "\(.id)\t\($mark) \(if $w > 0 then $bold + (.key // .id | pad($w + 2)) + $off + " " else "" end)\(if $palette[.status_color // ""] then $off + rgb($palette[.status_color]) else $dim end)\(.status // "" | pad($sw + 1))\($off)\($dim) \(.at // .updated | age | pad(7))\($off) \(if $kw > 0 then spark + "  " else "" end)\(.title // "" | sub("^\\s+"; ""))" end )
   ' $dir/items.json
   update_window_name
 }
@@ -414,40 +471,72 @@ glow_style() {
 
 # preview <pane> <id> [full]: the source's Markdown, rendered by glow to fit the
 # preview pane, or in glow's pager when full.
+# A source's preview may start with "<!-- panel:image <path> -->": the picture is
+# drawn above the text with kitty's graphics protocol (unicode placeholders,
+# which survive tmux and fzf; tmux needs allow-passthrough on).
 preview() {
-  local source="$(pane_source $1)" style
+  local source="$(pane_source $1)" style md img
   [[ -n $2 ]] || return 0
   style="$(glow_style)"
+  md="$(run_source $source preview $2)"
+  if [[ $md == '<!-- panel:image '* ]]; then
+    img=${${md%%$'\n'*}#<!-- panel:image }; img=${img% -->}
+    md=${md#*$'\n'}
+  fi
   if [[ $3 == full ]]; then
     local cols=${COLUMNS:-$(tput cols 2>/dev/null || print 100)}
-    run_source $source preview $2 | glow -p -s "$style" -w $(( cols > 120 ? 120 : cols )) -
+    print -r -- $md | glow -p -s "$style" -w $(( cols > 120 ? 120 : cols )) -
   else
-    run_source $source preview $2 | glow -s "$style" -w ${FZF_PREVIEW_COLUMNS:-80} -
+    if [[ -n $img && -f $img ]] && (( $+commands[kitten] )); then
+      local w=$(( ${FZF_PREVIEW_COLUMNS:-80} - 4 )) h=$(( ${FZF_PREVIEW_LINES:-30} * 2 / 5 ))
+      print   # a line of space above the picture
+      kitten icat --stdin=no --transfer-mode=memory --unicode-placeholder --place=${w}x${h}@0x0 $img 2>/dev/null |
+        sed '$d' | sed $'$s/$/\e[m/'
+    fi
+    print -r -- $md | glow -s "$style" -w ${FZF_PREVIEW_COLUMNS:-80} -
   fi
 }
 
 # prompt <pane> <pid>: "Title › " or, with views, "Title › view › "
 prompt() {
-  local title="$(conf --arg p $1 '.panes[$p].title // $p')" unit="$(cur_unit $1 $2)"
+  local title="$(pane_title $1)" unit="$(cur_unit $1 $2)"
   local find=""; [[ -f "$PANEL_CACHE/panes/$1/find.$2" ]] && find=$'\e[38;2;249;226;175;1m'"find › "$'\e[0m'
   if [[ $unit == */* ]]; then print -r -- "$title › ${unit#*/} › $find"; else print -r -- "$title › $find"; fi
 }
 
-# switch_view <pane> <pid> <+1|-1>: show the next / previous view
+# switch_view <pane> <pid> <+1|-1> [id]: show the next / previous view. Each view
+# keeps its own cursor: the item under it (id) is remembered for the view being
+# left, and restored when the new view's list has loaded (restore_cursor).
 switch_view() {
   local -a views=( ${(f)"$(visible_views $1 $2)"} )
-  local cur i
+  local cur i dir="$PANEL_CACHE/panes/$1"
   (( $#views )) || return 0
   cur="$(cur_unit $1 $2)"; cur=${cur#*/}
+  [[ -n $4 ]] && print -r -- $4 > $dir/cursor.$2.$cur
   i=${views[(Ie)$cur]}
   i=$(( (i - 1 + $3 + $#views) % $#views + 1 ))
-  print -r -- $views[i] > "$PANEL_CACHE/panes/$1/view.$2"
+  print -r -- $views[i] > $dir/view.$2
+  # where the cursor goes once the new list loads: its remembered item, else the top
+  local id="$(cat $dir/cursor.$2.$views[i] 2>/dev/null)" n=""
+  [[ -n $id ]] && n="$(jq -r --arg id $id 'map(.id) | index($id) // empty' "$dir/$views[i]/items.json" 2>/dev/null)"
+  if [[ -n $n ]]; then print -r -- "pos($(( n + 1 )))"; else print -r -- first; fi > $dir/cursor.$2.pending
+}
+
+# restore_cursor <pane> <pid> <query>: after a view switch (fzf's load event),
+# put the cursor back on that view's remembered item, else at the top. Prints
+# the fzf action; nothing for any other reload (a fetch keeps the cursor).
+restore_cursor() {
+  local f="$PANEL_CACHE/panes/$1/cursor.$2.pending"
+  [[ -f $f ]] || return 0
+  # with a query typed, or in find mode, rows aren't in item order: just the top
+  if [[ -n $3 || -f $PANEL_CACHE/panes/$1/find.$2 ]]; then print -r -- first; else cat $f; fi
+  rm -f $f
 }
 
 # toggle_find <pane> <pid>: switch find mode; prints the fzf actions to do it
 toggle_find() {
   local f="$PANEL_CACHE/panes/$1/find.$2" redraw="transform-prompt($self _prompt $1 $2)+reload($self _lines $1 $2)"
-  local title="$(conf --arg p $1 '.panes[$p].title // $p' | tr -d '()')"
+  local title="$(pane_title $1 | tr -d '()')"
   if [[ -f $f ]]; then
     rm -f $f
     print -r -- "unbind(change)+enable-search+clear-query+change-input-label()+$redraw"
@@ -488,18 +577,27 @@ view() {
   sock=$dir/fzf.$$.sock   # this view's own: a pane can be open more than once
   title="$(conf --arg p $pane '.panes[$p].title // $p')"
   [[ -n $TMUX_PANE ]] && tmux set-option -p -t $TMUX_PANE @panel_pane $pane
-  trap "rm -f $sock $dir/view.$$ $dir/find.$$ $dir/reveal.$$" EXIT
+  # where the preview goes: the default (beside the list only if the preview
+  # gets 110 columns, else under it), or the pane's own "preview"
+  local pw="$(conf --arg p $pane '.panes[$p].preview // empty')"
+  case $pw in
+    ("")   pw='right,60%,wrap,border-left,<110(down,65%,wrap,border-top)' ;;
+    (side) pw='right,70%,wrap,border-left' ;;
+  esac
+  trap "rm -f $sock $dir/view.$$ $dir/find.$$ $dir/reveal.$$ $dir/cursor.$$.*(N)" EXIT
   trap 'exit 0' HUP TERM
   # ctrl-c ends fzf and it starts again; close the pane with tmux (prefix x).
   while :; do
     rm -f $sock $dir/find.$$ $dir/reveal.$$   # (re)start in normal search, hidden views hidden
     # prompt first: with --track, fzf drops actions that come after a reload
     local me="$pane $$" redraw="transform-prompt($self _prompt $pane $$)+reload($self _lines $pane $$)"
-    lines $pane $$ | fzf --ansi --listen=$sock --delimiter=$'\t' --with-nth=2 --id-nth=1 --track \
+    # the first list: tell it the width, as fzf does for every reload after
+    local size=( $(stty size < /dev/tty 2>/dev/null) )   # rows, columns of the terminal itself
+    FZF_COLUMNS=${size[2]:-$FZF_COLUMNS} lines $pane $$ | fzf --ansi --listen=$sock --delimiter=$'\t' --with-nth=2 --id-nth=1 --track \
       --no-sort --header-lines=1 --layout=reverse --info=inline-right --prompt="$(prompt $pane $$)" \
       --input-border=line --color='input-label:#f9e2af:bold' \
       --preview "$self _preview $pane {1}" \
-      --preview-window 'right,60%,wrap,border-left,<110(down,65%,wrap,border-top)' \
+      --preview-window "$pw" \
       --bind "focus:execute-silent($self _focus $me {1})" \
       --bind "esc:transform($self _esc $me)" \
       --bind "enter:execute($self _preview $pane {1} full)" \
@@ -511,8 +609,9 @@ view() {
       --bind "change:reload($self _find $me {q})" \
       --bind "alt-f:transform($self _toggle_find $me)" \
       --bind "alt-h:transform($self _reveal $me)" \
-      --bind "tab:execute-silent($self _view $me 1)+$redraw" \
-      --bind "shift-tab:execute-silent($self _view $me -1)+$redraw" \
+      --bind "tab:execute-silent($self _view $me 1 {1})+$redraw" \
+      --bind "shift-tab:execute-silent($self _view $me -1 {1})+$redraw" \
+      --bind "load:transform($self _cursor $me {q})" \
       --bind "home:first" --bind "end:last"
     sleep 0.5
     changed && exec $self view $pane
@@ -596,6 +695,9 @@ up() {
   if [[ -n $TMUX ]]; then tmux switch-client -t "=$SESSION"; else tmux attach -t "=$SESSION"; fi
 }
 
+# The per-view commands fzf runs all start with a pane: load its settings once
+[[ $1 == (view|_lines|_prompt|_toggle_find|_esc|_reveal|_find|_view|_fetch_now|_preview|_focus|_open|_seen_all|_unseen) && -n $2 ]] && load_pane $2
+
 # Commands you run: stop at a missing config, before anything else complains
 [[ $1 == (up|fetch|fetcher|view|hud) ]] && conf empty
 
@@ -616,7 +718,8 @@ case $1 in
   _esc)      esc_key $2 $3 ;;
   _reveal)   toggle_reveal $2 $3 ;;
   _find)     find_words $2 $3 "$4" ;;
-  _view)     switch_view $2 $3 $4 ;;
+  _view)     switch_view $2 $3 $4 $5 ;;
+  _cursor)   restore_cursor $2 $3 "$4" ;;
   _fetch_now) fetch_pane "$(cur_unit $2 $3)" ;;
   _preview)  preview $2 $3 $4 ;;
   _focus)    on_focus "$(cur_unit $2 $3)" $4 ;;
