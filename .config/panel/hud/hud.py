@@ -465,6 +465,7 @@ class Voice(threading.Thread):
                            "cache": os.path.join(self.job["cache"], "hud", "voice")}, f)
             self.proc = subprocess.Popen(
                 ["uv", "run", "-q", "--no-project", "--python", "3.12", "--with", "kokoro-onnx", "--with", "soundfile",
+                 "--with", "sounddevice",
                  "python", "-I", os.path.join(HERE, "speak.py"), spec],
                 stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, start_new_session=True)
             for line in self.proc.stdout:

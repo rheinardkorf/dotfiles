@@ -203,7 +203,7 @@ for f in "kokoro-v1.0.onnx 325532387" "voices-v1.0.bin 28214398"; do
     fi
   fi
 done
-KOKORO_ENV=(uv run -q --no-project --python 3.12 --with kokoro-onnx --with soundfile python -I -c "import kokoro_onnx, soundfile")
+KOKORO_ENV=(uv run -q --no-project --python 3.12 --with kokoro-onnx --with soundfile --with sounddevice python -I -c "import kokoro_onnx, soundfile, sounddevice")
 if ! command -v uv >/dev/null; then
   $DRY_RUN && todo "kokoro environment (uv is installed in the Packages step)" || fail "uv needed for the kokoro environment"
 elif UV_OFFLINE=1 "${KOKORO_ENV[@]}" >/dev/null 2>&1; then   # already there: works without downloading
