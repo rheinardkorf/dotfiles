@@ -43,7 +43,47 @@ C = {
     "sky": (137, 220, 235), "sapphire": (116, 199, 236), "blue": (137, 180, 250), "lavender": (180, 190, 254),
     "teal": (148, 226, 213), "green": (166, 227, 161), "yellow": (249, 226, 175), "peach": (250, 179, 135),
     "red": (243, 139, 168), "white": (245, 247, 255), "base": (30, 30, 46),
+    "mauve": (203, 166, 247), "pink": (245, 194, 231), "flamingo": (242, 205, 205),
+    "rosewater": (245, 224, 220), "maroon": (235, 160, 172),
 }
+
+# The HUD draws with roles, not colours: a theme maps each role to a colour.
+#   primary    the name, clock, major ticks, the core, keys and cursor
+#   secondary  gradients, the inner ring segments, the orbit trails
+#   ring       the outer ring segments (and boot noise)
+#   accent     the shape inside the reactor
+#   radar      the radar sweep and the CPU spark
+#   alert      the pulse when an agent waits on you, and rows needing attention
+THEMES = {
+    "arc": {"primary": "sky", "secondary": "blue", "ring": "sapphire", "accent": "lavender", "radar": "teal", "alert": "peach"},
+    "ember": {"primary": "peach", "secondary": "red", "ring": "maroon", "accent": "yellow", "radar": "flamingo", "alert": "sky"},
+    "matrix": {"primary": "green", "secondary": "teal", "ring": "green", "accent": "yellow", "radar": "green", "alert": "red"},
+    "nebula": {"primary": "pink", "secondary": "mauve", "ring": "lavender", "accent": "flamingo", "radar": "mauve", "alert": "peach"},
+}
+
+# The reactor's pattern
+REACTOR = {"shape": 3, "segments": 10, "ticks": 60, "orbiters": 3, "speed": 1.0}
+
+
+def colour(v):
+    """A palette name (\"mauve\") or \"#rrggbb\"."""
+    if isinstance(v, str) and re.fullmatch(r"#[0-9a-fA-F]{6}", v):
+        return tuple(int(v[i:i + 2], 16) for i in (1, 3, 5))
+    return C.get(v)
+
+
+def configure(a):
+    """The assistant's theme (a preset's name, or {"base": preset, role: colour, ...})
+    and reactor settings; anything unknown keeps the default."""
+    t = a.get("theme") or "arc"
+    t = {"base": t} if isinstance(t, str) else dict(t)
+    roles = {**THEMES["arc"], **THEMES.get(t.pop("base", "arc"), {}), **t}
+    for role, v in roles.items():
+        C[role] = colour(v) or colour(THEMES["arc"].get(role)) or C["text"]
+    r = a.get("reactor") or {}
+    for k, default in REACTOR.items():
+        if isinstance(r.get(k), (int, float)) and not isinstance(r.get(k), bool):
+            REACTOR[k] = type(default)(r[k])
 
 
 def mix(a, b, f):
@@ -260,7 +300,7 @@ def systems(units, now):
         elif all(f["missing"] for f in fs):
             state, col = "no data", "dim"
         elif attention:
-            state, col = next((s["word"] for s in attention if s.get("word")), "attention"), "peach"
+            state, col = next((s["word"] for s in attention if s.get("word")), "attention"), "alert"
         else:
             state, col = next((s["word"] for s in sums if s.get("word")), "online"), "green"
         name = (fs[0].get("title") or pane).lower()   # the pane's title in the config
@@ -444,38 +484,44 @@ def reactor(scr, x, y, cw, ch, t, busy, waiting):
     b = Braille(cw, ch)
     cx, cy = cw - 0.5, ch * 2 - 0.5
     R = min(cw, ch * 2) - 1
+    alert = waiting > 0 and int(t * 2) % 2 == 0
+    t *= REACTOR["speed"]
     speed = 1.6 + busy * 0.8
     pulse = 0.5 + 0.5 * math.sin(t * speed)
-    alert = waiting > 0 and int(t * 2) % 2 == 0
     # outer ring: segments turning slowly
-    for i in range(10):
-        a0 = math.radians(i * 36 + t * 18)
-        b.arc(cx, cy, R, a0, a0 + math.radians(28), C["sapphire"], 1)
-        b.arc(cx, cy, R - 1.5, a0 + math.radians(4), a0 + math.radians(24), C["blue"], 1)
+    n = max(1, REACTOR["segments"])
+    for i in range(n):
+        a0 = math.radians(i * 360 / n + t * 18)
+        b.arc(cx, cy, R, a0, a0 + math.radians(280 / n), C["ring"], 1)
+        b.arc(cx, cy, R - 1.5, a0 + math.radians(40 / n), a0 + math.radians(240 / n), C["secondary"], 1)
     # ticks turning the other way, every fifth one longer
-    for i in range(60):
-        a = math.radians(i * 6 - t * 9)
+    n = max(0, REACTOR["ticks"])
+    for i in range(n):
+        a = math.radians(i * 360 / n - t * 9)
         r0 = R * (0.74 if i % 5 == 0 else 0.79)
         b.line(cx + r0 * math.cos(a), cy + r0 * math.sin(a), cx + R * 0.85 * math.cos(a), cy + R * 0.85 * math.sin(a),
-               C["sky"] if i % 5 == 0 else C["faint"], 2 if i % 5 == 0 else 0)
-    # pulsing ring (peach when an agent waits on you)
-    ring = mix(C["blue"], C["peach"] if alert else C["sky"], pulse)
+               C["primary"] if i % 5 == 0 else C["faint"], 2 if i % 5 == 0 else 0)
+    # pulsing ring (the alert colour when an agent waits on you)
+    ring = mix(C["secondary"], C["alert"] if alert else C["primary"], pulse)
     b.arc(cx, cy, R * 0.62, 0, 2 * math.pi, ring, 3)
     b.arc(cx, cy, R * 0.60, 0, 2 * math.pi, ring, 3)
     # orbiting dots
-    for k in range(3):
-        a = t * 1.9 + k * 2 * math.pi / 3
+    n = max(0, REACTOR["orbiters"])
+    for k in range(n):
+        a = t * 1.9 + k * 2 * math.pi / n
         for d in range(5):
             b.dot(cx + R * 0.69 * math.cos(a - d * 0.05), cy + R * 0.69 * math.sin(a - d * 0.05),
-                  mix(C["white"], C["blue"], d / 5), 4)
-    # triangle, turning slowly
-    pts = [(cx + R * 0.46 * math.cos(math.radians(90 + 120 * k + t * 6)),
-            cy + R * 0.46 * math.sin(math.radians(90 + 120 * k + t * 6))) for k in range(3)]
-    for k in range(3):
-        b.line(*pts[k], *pts[(k + 1) % 3], C["lavender"], 2)
+                  mix(C["white"], C["secondary"], d / 5), 4)
+    # a shape (3: triangle, 4: square, ...; 0: none), turning slowly
+    n = REACTOR["shape"]
+    if n >= 3:
+        pts = [(cx + R * 0.46 * math.cos(math.radians(90 + 360 / n * k + t * 6)),
+                cy + R * 0.46 * math.sin(math.radians(90 + 360 / n * k + t * 6))) for k in range(n)]
+        for k in range(n):
+            b.line(*pts[k], *pts[(k + 1) % n], C["accent"], 2)
     # core
     for r in range(int(R * 0.22), 0, -1):
-        b.arc(cx, cy, r, 0, 2 * math.pi, mix(C["white"], C["sky"], r / (R * 0.22) * (0.6 + 0.4 * pulse)), 5)
+        b.arc(cx, cy, r, 0, 2 * math.pi, mix(C["white"], C["primary"], r / (R * 0.22) * (0.6 + 0.4 * pulse)), 5)
     b.draw(scr, x, y)
 
 
@@ -490,7 +536,7 @@ def radar(scr, x, y, cw, ch, t, agents):
     sweep = (t * 1.6) % (2 * math.pi)
     for k in range(8):   # the sweep and its fading trail
         a = sweep - k * 0.07
-        b.line(cx, cy, cx + R * math.cos(a), cy + R * math.sin(a), mix(C["teal"], C["faint"], k / 8), 1)
+        b.line(cx, cy, cx + R * math.cos(a), cy + R * math.sin(a), mix(C["radar"], C["faint"], k / 8), 1)
     for i, it in enumerate(agents):
         a = 2 * math.pi * i / max(1, len(agents)) - math.pi / 2
         st = it.get("status") or ""
@@ -534,6 +580,7 @@ NOISE = "▓▒░#%&@$*+=<>/\\|"
 class Hud:
     def __init__(self, job):
         self.job, self.a = job, job["assistant"]
+        configure(self.a)
         self.name = self.a.get("name", "A.D.A.")
         self.meaning = self.a.get("meaning", "")
         self.window = job.get("mode") == "window"
@@ -625,7 +672,7 @@ class Hud:
                 self.boot(boot, self.boot_end)
                 for yy in range(line, h):
                     scr.ch[yy], scr.co[yy] = boot.ch[yy], boot.co[yy]
-                scr.put(0, line, "─" * w, C["sky"])
+                scr.put(0, line, "─" * w, C["primary"])
         return scr.render()
 
     def boot(self, scr, t):
@@ -637,9 +684,9 @@ class Hud:
         for cx, cy in cells:   # resolve out of noise, left to right
             settle = 0.25 + 1.1 * cx / max(1, tw)
             if t >= settle:
-                scr.put(x0 + cx, top + cy, "█", mix(C["sky"], C["blue"], cx / max(1, tw)))
+                scr.put(x0 + cx, top + cy, "█", mix(C["primary"], C["secondary"], cx / max(1, tw)))
             elif t > settle - 0.6:
-                scr.put(x0 + cx, top + cy, rnd.choice(NOISE), rnd.choice([C["blue"], C["sapphire"], C["faint"]]))
+                scr.put(x0 + cx, top + cy, rnd.choice(NOISE), rnd.choice([C["secondary"], C["ring"], C["faint"]]))
         if t > 1.2:
             n = int((t - 1.2) / 0.6 * len(self.meaning))
             scr.center(top + 6, self.meaning[:n], C["sub"])
@@ -666,7 +713,7 @@ class Hud:
         w, h = scr.w, scr.h
         now = datetime.now()
         # header
-        scr.put(2, 0, f"{self.name}  ", C["sky"])
+        scr.put(2, 0, f"{self.name}  ", C["primary"])
         scr.put(2 + len(self.name) + 2, 0, self.meaning, C["dim"])
         hint = "letter: go there · space: brief me" if self.window else "letter: go there · space: brief again · esc: dismiss"
         scr.put(w - len(hint) - 2, 0, hint, C["faint"])
@@ -685,7 +732,7 @@ class Hud:
         if side:
             # left: the clock, the date and the systems
             lx = 3
-            big(scr, lx, body_top, now.strftime("%H:%M"), lambda cx, cy, tw: mix(C["sky"], C["blue"], cx / max(1, tw)))
+            big(scr, lx, body_top, now.strftime("%H:%M"), lambda cx, cy, tw: mix(C["primary"], C["secondary"], cx / max(1, tw)))
             scr.put(lx + 20, body_top + 4, now.strftime("%S"), C["dim"])
             scr.put(lx, body_top + 6, now.strftime("%A %-d %B"), C["sub"])
             for i, (name, state, col, summary) in enumerate(self.rows):
@@ -693,7 +740,7 @@ class Hud:
                 if yy + 1 >= body_top + body_h:
                     break
                 key = self.keys[i] if self.jumps.get(self.keys[i]) or self.keys[i] in self.opens else ""
-                scr.put(lx, yy, f"{key or ' '}", C["sky"])   # press it to jump there
+                scr.put(lx, yy, f"{key or ' '}", C["primary"])   # press it to jump there
                 scr.put(lx + 2, yy, "●", C[col])
                 scr.put(lx + 4, yy, name.ljust(10), C["text"])
                 scr.put(lx + 14, yy, state, C[col])
@@ -704,7 +751,7 @@ class Hud:
             v = self.vitals
             bar(scr, vx, body_top, "CPU", v.cpu, vw)
             spark = "".join("▁▂▃▄▅▆▇█"[min(7, int(c / 12.5))] for c in v.history[-(vw + 9):])
-            scr.put(vx + 5, body_top + 1, spark, C["teal"])
+            scr.put(vx + 5, body_top + 1, spark, C["radar"])
             bar(scr, vx, body_top + 3, "MEM", v.mem, vw)
             if v.bat is not None:
                 bar(scr, vx, body_top + 5, "BAT", v.bat, vw, " ⚡" if v.charging else "")
@@ -725,7 +772,7 @@ class Hud:
         for i, ln in enumerate(lines):
             scr.put((w - bw) // 2, by + i, ln, C["text"])
         if not self.voice.done and lines and int(t * 3) % 2 == 0:
-            scr.put((w - bw) // 2 + len(lines[-1]), by + len(lines) - 1, "▍", C["sky"])
+            scr.put((w - bw) // 2 + len(lines[-1]), by + len(lines) - 1, "▍", C["primary"])
         # ticker
         off = int(t * 9) % len(self.tick)
         scr.put(0, h - 1, (self.tick * 3)[off: off + w], C["dim"])

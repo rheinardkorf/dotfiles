@@ -10,12 +10,17 @@
   // the HUD (panel hud): its name and voice (a Kokoro voice, or a blend)
   "assistant": {
     "name": "A.D.A.",
-    "meaning": "Always Diligent Assistant",
+    "meaning": "Adaptive Daily Attendant",
     "voice": "bf_isabella",
     "lang": "en-gb",
     // HUD-only sources: just a summary (no pane); the key runs "open"
     "sources": [{"source": "streak", "title": "Streak", "key": "s",
-                 "open": "~/.scripts/kitty-panel streak ~/.scripts/streak --width=600 --height=340 --edge=center-sized --opacity=1"}]
+                 "open": "~/.scripts/kitty-panel streak ~/.scripts/streak --width=600 --height=340 --edge=center-sized --opacity=1"}],
+    // optional, the look: a preset (arc, ember, matrix, nebula) or a few roles
+    // changed (primary, secondary, ring, accent, radar, alert: a Catppuccin name
+    // or #rrggbb), and the reactor's pattern (shape: sides, 0 = none)
+    "theme": {"base": "arc", "accent": "mauve"},
+    "reactor": {"shape": 3, "segments": 10, "ticks": 60, "orbiters": 3, "speed": 1}
   },
 
   "panes": {

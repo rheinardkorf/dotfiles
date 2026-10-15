@@ -8,12 +8,15 @@
   // the HUD (panel hud, cmd+shift+a): A.D.A., one British Kokoro voice
   "assistant": {
     "name": "A.D.A.",
-    "meaning": "Always Diligent Assistant",
+    "meaning": "Adaptive Daily Attendant",
     "voice": "bf_isabella",
     "lang": "en-gb",
     // HUD-only: the streak (gentle until 18:00, then urgent); s opens the logger
     "sources": [{"source": "streak", "title": "Streak", "key": "s",
-                 "open": "~/.scripts/kitty-panel streak ~/.scripts/streak --width=600 --height=340 --edge=center-sized --opacity=1"}]
+                 "open": "~/.scripts/kitty-panel streak ~/.scripts/streak --width=600 --height=340 --edge=center-sized --opacity=1"}],
+    // the look: warm Iron Man colours, a square in an 8-segment ring, spinning faster
+    "theme": "ember",
+    "reactor": {"shape": 4, "segments": 8, "orbiters": 2, "speed": 1.6}
   },
 
   "panes": {

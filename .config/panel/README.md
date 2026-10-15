@@ -230,9 +230,20 @@ library only).
   today is logged or paused (with a heads-up before a pause), a gentle mention
   when it isn't, attention and an urgent sentence from 18:00
   (`sources.streak.urgent_from`); `s` opens the streak logger.
-- **Per machine** (`assistant` in the config): mando is A.D.A. ("Always
-  Diligent Assistant", voice `bf_isabella`), mantis is I.R.I.S. ("Intelligent
+- **Per machine** (`assistant` in the config): mando is A.D.A. ("Adaptive
+  Daily Attendant", voice `bf_isabella`), mantis is I.R.I.S. ("Intelligent
   Reporting & Insight System", a blend of `af_jessica` and `af_river`).
+- **Look** (`assistant.theme` and `assistant.reactor`, both optional): the HUD
+  draws with colour roles: `primary` (name, clock, core, keys), `secondary`
+  (gradients, inner ring), `ring` (outer ring), `accent` (the shape in the
+  reactor), `radar` (sweep, CPU spark) and `alert` (an agent waiting, rows
+  needing attention). `theme` is a preset (`arc`, the default; `ember`,
+  `matrix`, `nebula`), or `{"base": preset, role: colour, ...}` to change a few
+  roles; a colour is a Catppuccin name (`mauve`, `pink`, `peach`, ...) or
+  `#rrggbb`. `reactor` sets its pattern: `shape` (sides of the shape inside: 3
+  is a triangle, 6 a hexagon, 0 none), `segments` (outer ring), `ticks`,
+  `orbiters` and `speed` (1 = as now). The HUD window starts again when the
+  config changes, so edits show at once.
 
 As a window (a pane `{"type": "hud"}` in a layout; mantis has `iris` first) it
 stays open and silent: space speaks the briefing, it reads the cache again every
