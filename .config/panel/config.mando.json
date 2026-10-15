@@ -1,0 +1,72 @@
+{
+  // mando (home). Committed, so public: anything sensitive goes in
+  // config.local.json (not committed), which is merged on top.
+  "seen_after": "2s",
+  // no fetching after this long without keyboard or mouse ("0" = never pause)
+  "pause_when_idle": "10m",
+
+  // the HUD (panel hud, cmd+shift+a): A.D.A., one British Kokoro voice
+  "assistant": {
+    "name": "A.D.A.",
+    "meaning": "Always Diligent Assistant",
+    "voice": "bf_isabella",
+    "lang": "en-gb"
+  },
+
+  "panes": {
+    // the assistant HUD as a window: silent, space for a briefing
+    "assistant": {
+      "title": "A.D.A.",
+      "type": "hud"
+    },
+
+    // GitHub, one pane with views (tab switches): my PRs, reviews waiting on me,
+    // and Actions runs in repos I'm active in or have PRs in. No contributions:
+    // that's a work view.
+    "github": {
+      "title": "GitHub",
+      "source": "github",
+      "views": {
+        "my-prs": "is:open is:pr author:@me archived:false sort:updated-desc",
+        "review-requests": "is:open is:pr review-requested:@me archived:false sort:updated-desc",
+        "actions": "actions"
+      },
+      "every": {"*": "5m", "actions": "15m"}
+    },
+
+    // running agents (Claude Code sessions) and this turn's sub-agents, all local;
+    // hooks in ~/.claude/settings.json (panel event agents) push changes in.
+    // ctrl-o jumps to the agent's tmux pane
+    "agents": {
+      "title": "Agents",
+      "source": "agents",
+      "key": "A",
+      "query": "active",
+      "every": "15s"
+    },
+
+    // RSS: each view is a category; the feeds themselves live in config.local.json
+    // (panes.rss.views: {"tech": [urls...], ...}). Not in the layout until they do.
+    "rss": {
+      "title": "RSS",
+      "source": "rss",
+      "every": "30m",
+      // side by side at any width: a narrow list of titles, the article beside it
+      "preview": "side",
+      "list": "title",
+      // unread articles aren't worth a ●N in the window name
+      "count": false,
+      // alt-r: read later (the "later" view, from config.local.json, lists them)
+      "actions": {"alt-r": {"tag": "later", "icon": "󰃀", "name": "read later"}}
+    }
+  },
+
+  "layouts": {
+    "home": {
+      "ada": ["assistant"],
+      "github": ["github"],
+      "agents": ["agents"]
+      // with feeds in config.local.json, add: "rss": ["rss"]
+    }
+  }
+}
