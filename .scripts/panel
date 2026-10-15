@@ -1,8 +1,8 @@
 #!/usr/bin/env zsh
 # panel: a tmux control panel of fzf lists over cached data.
 #
-#   panel up [layout]       build the tmux session "panel" for a layout, or repair it:
-#                           add the windows it's missing (then switch to it)
+#   panel up [-d] [layout]  build the tmux session "panel" for a layout, or repair it:
+#                           add the windows it's missing; then switch to it (-d: don't)
 #   panel fetch [pane...]   fetch now (every pane in the config if none given)
 #   panel fetcher [layout]  loop: fetch each pane of the layout when it's due
 #   panel view <pane>       the fzf list for one pane (what each tmux pane runs)
@@ -590,6 +590,7 @@ up() {
     (( $#have )) && added+=( fetch )
   fi
   (( $#added )) && print "panel: added ${(j:, :)added}"
+  [[ -n $PANEL_DETACHED ]] && return 0
   if [[ -n $TMUX ]]; then tmux switch-client -t "=$SESSION"; else tmux attach -t "=$SESSION"; fi
 }
 
@@ -597,7 +598,7 @@ up() {
 [[ $1 == (up|fetch|fetcher|view|hud) ]] && conf empty
 
 case $1 in
-  up)        up $2 ;;
+  up)        if [[ $2 == -d ]]; then PANEL_DETACHED=1 up $3; else up $2; fi ;;
   fetch)     shift; (( $# )) || set -- ${(f)"$(conf '.panes | to_entries[] | select(.value.source) | .key')"}
              for p in $@; do
                if [[ $p == */* ]]; then fetch_pane $p

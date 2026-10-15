@@ -103,6 +103,10 @@ internally:
   context, one pane per entry, plus a `fetch` window. Run again, it repairs the
   session: windows the layout has but the session lacks (known by their
   `@panel_name`) come back in the layout's order; nothing else is touched.
+  `panel up -d` does the same without switching to it. **hyper+p**
+  (Hammerspoon, `~/.scripts/panel-open`) opens the session from anywhere:
+  it switches the last-used tmux client to it and brings kitty forward, or opens
+  a kitty window attached to it when there is none.
 - **The fetcher** (`panel fetcher`) loops every 15 seconds and fetches each
   unit whose interval has passed. Each fetch writes the list and a status file
   (`ok`, or the error, which becomes the pane's header). It pauses after

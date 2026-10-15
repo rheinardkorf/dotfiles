@@ -49,6 +49,11 @@ hs.hotkey.bind(meh, "s", function()
     hs.execute(home .. "/.scripts/kitty-panel streak " .. home .. "/.scripts/streak --width=600 --height=340 --edge=center-sized --opacity=1", true)
 end)
 
+-- Bind hyper + p to the panel session (built or repaired; kitty opened if needed)
+hs.hotkey.bind(hyper, "p", function()
+    hs.task.new("/bin/zsh", nil, {"-c", os.getenv("HOME") .. "/.scripts/panel-open"}):start()
+end)
+
 -- Get the current window app id
 hs.hotkey.bind(hyper, "i", function()
     local app = hs.window.focusedWindow():application()
