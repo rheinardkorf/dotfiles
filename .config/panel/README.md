@@ -218,7 +218,9 @@ library only).
   (linked, nominal, ...), `brief` (phrasings of one spoken sentence, one picked
   at random) and `ticker` extras. Helpers for jq sources (number words,
   durations) are in `lib/summary.jq`. A pane's `summary` setting picks which
-  views are asked (default all; aws asks alarms, sqs and cloudformation); a
+  views are asked (default all; aws asks alarms, sqs and cloudformation;
+  `"pane"` asks the source once with all its views, for one line and one
+  sentence, as rss does); a
   source without `summary` gets a plain count. A pane's `recent` window
   (default 24h) reaches every summary as `recent`, with the jq helper `fresh`,
   so "attention" can mean new trouble only: a stack that failed within the

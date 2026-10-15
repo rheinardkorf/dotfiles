@@ -503,8 +503,33 @@ def count(n, one, many):
     return f"{WORDS[n] if 0 <= n < len(WORDS) else n} {one if n == 1 else many}"
 
 
+def pane_summary(f):
+    """All categories at once (pane mode): one line, one short sentence."""
+    new = [(v["view"], v.get("unseen", 0)) for v in f["views"] if v["view"] != "later" and v.get("unseen")]
+    later = next((v.get("count", 0) for v in f["views"] if v["view"] == "later"), 0)
+    bits = [f"{n} new in {v}" for v, n in new] + ([f"{later} saved for later"] if later else [])
+    if not bits:
+        return {"word": "synced"}
+    out = {"line": " · ".join(bits), "word": "synced"}
+    def listed(parts):
+        return parts[0] if len(parts) == 1 else ", ".join(parts[:-1]) + " and " + parts[-1]
+    total = sum(n for _, n in new)
+    saved = f"{count(later, 'article', 'articles')} saved for later" if later else ""
+    if new:
+        where = listed([f"{WORDS[n] if n < len(WORDS) else n} in {v}" for v, n in new])
+        plus = f", plus {WORDS[later] if later < len(WORDS) else later} saved for later" if later else ""
+        out["brief"] = [f"New reading: {where}{plus}.",
+                        f"{count(total, 'new article', 'new articles').capitalize()} in your feeds{plus}.",
+                        f"{where.capitalize()} to read{plus}."]
+    else:
+        out["brief"] = [f"{saved.capitalize()}.", f"Your reading list has {count(later, 'article', 'articles')}."]
+    return out
+
+
 def summary(view):
     f = json.load(sys.stdin)
+    if f.get("pane"):
+        return print(json.dumps(pane_summary(f)))
     if view == "later":   # the reading list: how long it is, not what's new
         n = f.get("count", 0)
         if not n:

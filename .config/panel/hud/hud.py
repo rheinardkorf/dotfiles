@@ -246,29 +246,47 @@ def summarize(job, units):
     now = int(time.time())
     config_dir = job.get("config_dir") or os.path.expanduser("~/.config/panel")
 
-    def run(f):
-        if not f.get("summary", True):
-            return {}
-        if f["missing"]:
-            return None
+    def facts_of(f):
         nxt = f["next"]
-        facts_in = {"view": f["view"], "count": len(f["items"]), "unseen": f["unseen"], "bad": len(f["bad"]),
-                    "recent": seconds(f.get("recent") or "24h"),
-                    "next": {"title": nxt.get("title"), "at": nxt["at"]} if nxt else None,
-                    "error": f["error"], "now": now, "items": f["items"]}
+        return {"view": f["view"], "count": len(f["items"]), "unseen": f["unseen"], "bad": len(f["bad"]),
+                "recent": seconds(f.get("recent") or "24h"),
+                "next": {"title": nxt.get("title"), "at": nxt["at"]} if nxt else None,
+                "error": f["error"], "now": now, "items": f["items"]}
+
+    def ask(source, view, facts_in):
         env = dict(os.environ, PANEL_CONFIG_DIR=config_dir,
-                   PANEL_SOURCE_CACHE=os.path.join(job["cache"], "sources", f["source"]),
-                   PANEL_SOURCE_CONFIG=json.dumps((job.get("sources") or {}).get(f["source"]) or {}))
+                   PANEL_SOURCE_CACHE=os.path.join(job["cache"], "sources", source),
+                   PANEL_SOURCE_CONFIG=json.dumps((job.get("sources") or {}).get(source) or {}))
         try:
-            r = subprocess.run([os.path.join(config_dir, "sources", f["source"]), "summary", f["view"] or ""],
+            r = subprocess.run([os.path.join(config_dir, "sources", source), "summary", view or ""],
                                input=json.dumps(facts_in), capture_output=True, text=True, timeout=5, env=env)
             out = json.loads(r.stdout) if r.returncode == 0 and r.stdout.strip() else None
             return out if isinstance(out, dict) else None
         except Exception:
             return None
 
+    # a pane in "pane" mode is asked once, with all its views; the answer goes on its
+    # first unit (the others say nothing), so it reads as one line and one sentence
+    jobs, panes = [], {}
+    for f in units:
+        if not f.get("summary", True):
+            f["sum"] = {}
+        elif f.get("summary_mode") == "pane":
+            panes.setdefault(f["pane"], []).append(f)
+        elif f["missing"]:
+            f["sum"] = None
+        else:
+            jobs.append((f, lambda f=f: ask(f["source"], f["view"], facts_of(f))))
+    for fs in panes.values():
+        live = [f for f in fs if not f["missing"]]
+        for f in fs:
+            f["sum"] = {}
+        if live:
+            jobs.append((live[0], lambda live=live: ask(live[0]["source"], "", {
+                "pane": True, "views": [facts_of(f) for f in live], "now": now,
+                "recent": seconds(live[0].get("recent") or "24h")})))
     with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
-        for f, s in zip(units, pool.map(run, units)):
+        for (f, _), s in zip(jobs, pool.map(lambda j: j[1](), jobs)):
             f["sum"] = s
 
 

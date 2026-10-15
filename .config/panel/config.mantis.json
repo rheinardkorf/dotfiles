@@ -85,6 +85,8 @@
       "list": "title",
       // unread articles aren't worth a ●N in the window name
       "count": false,
+      // the HUD hears from all categories at once: one line, one sentence
+      "summary": "pane",
       // alt-r: read later (the "later" view, from config.local.json, lists them)
       "actions": {"alt-r": {"tag": "later", "icon": "󰃀", "name": "read later"}}
     },
