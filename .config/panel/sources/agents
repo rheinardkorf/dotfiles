@@ -171,8 +171,10 @@ fetch_active() {
     jq -e '.ended_at == null' $f >/dev/null 2>&1 || continue
     jq -c --argjson t "$(( $(num $state/${f:t:r}/ended) > 0 ? $(num $state/${f:t:r}/ended) : $EPOCHSECONDS ))" '.ended_at = $t' $f > $f.tmp && mv $f.tmp $f
   done
-  jq -s -c . $tmp/*.json(N) > $cache/.sessions.json && mv $cache/.sessions.json $cache/sessions.json
-  [[ -s $cache/sessions.json ]] || print '[]' > $cache/sessions.json
+  # no sessions at all: an empty list (jq given no files would wait on stdin)
+  local -a found=( $tmp/*.json(N) )
+  if (( $#found )); then jq -s -c . $found > $cache/.sessions.json; else print '[]' > $cache/.sessions.json; fi
+  mv $cache/.sessions.json $cache/sessions.json
   rm -rf $tmp
   jq --argjson now $EPOCHSECONDS --argjson cw "$(jq -c '.context_window // 1000000' <<<"$conf")" '
     def window($m): if ($cw | type) == "object" then ($cw[$m] // $cw["*"] // 1000000) else $cw end;

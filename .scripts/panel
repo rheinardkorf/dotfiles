@@ -180,7 +180,8 @@ fetch_pane() {   # fetch_pane <unit>
   zsystem flock -t 0 -f fd $dir/lock 2>/dev/null || return 2   # already fetching
   since="$(jq -r '.ok_at // empty' $dir/meta.json 2>/dev/null)"
   out="$(mktemp $dir/.items.XXXX)" err="$(mktemp $dir/.err.XXXX)"
-  if PANEL_SINCE=$since run_source $source fetch "$query" > $out 2> $err &&
+  # stdin from /dev/null: a fetch must never wait on the terminal it runs in
+  if PANEL_SINCE=$since run_source $source fetch "$query" < /dev/null > $out 2> $err &&
      jq -e 'type == "array"' $out >/dev/null 2>&1; then
     mv $out $dir/items.json
     jq -n --argjson t $EPOCHSECONDS '{ok_at: $t, fetched_at: $t}' > $dir/.meta && mv $dir/.meta $dir/meta.json
