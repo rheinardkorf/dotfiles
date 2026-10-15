@@ -12,7 +12,10 @@
     "name": "A.D.A.",
     "meaning": "Always Diligent Assistant",
     "voice": "bf_isabella",
-    "lang": "en-gb"
+    "lang": "en-gb",
+    // HUD-only sources: just a summary (no pane); the key runs "open"
+    "sources": [{"source": "streak", "title": "Streak", "key": "s",
+                 "open": "~/.scripts/kitty-panel streak ~/.scripts/streak --width=600 --height=340 --edge=center-sized --opacity=1"}]
   },
 
   "panes": {

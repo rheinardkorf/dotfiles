@@ -172,8 +172,11 @@ def facts(job):
     seen = load(os.path.join(cache, "seen.json"), {})
     units = []
     for u in job["units"]:
-        items = load(os.path.join(cache, "panes", u["unit"], "items.json"), None)
-        meta = load(os.path.join(cache, "panes", u["unit"], "meta.json"), {})
+        if u.get("hud_only"):   # a HUD-only source: nothing cached, only its summary
+            items, meta = [], {}
+        else:
+            items = load(os.path.join(cache, "panes", u["unit"], "items.json"), None)
+            meta = load(os.path.join(cache, "panes", u["unit"], "meta.json"), {})
         f = dict(u, items=items or [], missing=items is None, error=meta.get("error"))
         unseen = 0
         for it in f["items"]:
@@ -562,6 +565,9 @@ class Hud:
         self.keys = letters([r[0] for r in self.rows], chosen)
         self.jumps = {k: next((w for w, ps in windows.items() if pane in ps), None)
                       for k, pane in zip(self.keys, panes) if k}
+        # HUD-only sources: their key runs their "open" command instead (e.g. the streak logger)
+        opens = {f["pane"]: f.get("open") for f in self.units if f.get("hud_only") and f.get("open")}
+        self.opens = {k: opens[pane] for k, pane in zip(self.keys, panes) if k and pane in opens}
         self.sentences = briefing(self.job, self.units, self.now)
         self.tick = ticker(self.units, self.rows, self.now)
         self.agents = next((f["items"] for f in self.units if f["source"] == "agents"), [])
@@ -569,6 +575,10 @@ class Hud:
     def jump(self, key):
         """Go to the window of the system with this letter (in the panel session);
         True when it went (the popup then closes)."""
+        if key in self.opens:   # run it, detached (it opens its own window)
+            subprocess.Popen(["/bin/zsh", "-c", self.opens[key]], start_new_session=True,
+                             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            return True
         win = self.jumps.get(key)
         if not win:
             return False
@@ -682,7 +692,7 @@ class Hud:
                 yy = body_top + 8 + i * 2
                 if yy + 1 >= body_top + body_h:
                     break
-                key = self.keys[i] if self.jumps.get(self.keys[i]) else ""
+                key = self.keys[i] if self.jumps.get(self.keys[i]) or self.keys[i] in self.opens else ""
                 scr.put(lx, yy, f"{key or ' '}", C["sky"])   # press it to jump there
                 scr.put(lx + 2, yy, "●", C[col])
                 scr.put(lx + 4, yy, name.ljust(10), C["text"])

@@ -10,7 +10,10 @@
     "name": "I.R.I.S.",
     "meaning": "Intelligent Reporting & Insight System",
     "voice": {"af_jessica": 0.5, "af_river": 0.5},
-    "lang": "en-us"
+    "lang": "en-us",
+    // HUD-only: the streak (gentle until 18:00, then urgent); s opens the logger
+    "sources": [{"source": "streak", "title": "Streak", "key": "s",
+                 "open": "~/.scripts/kitty-panel streak ~/.scripts/streak --width=600 --height=340 --edge=center-sized --opacity=1"}]
   },
 
   "panes": {

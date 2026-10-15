@@ -1,0 +1,60 @@
+#!/usr/bin/env zsh
+# panel source: the streak (~/.scripts/streak), for the HUD only: no pane, no
+# fetch, nothing cached. It reads `streak json` (the shared streak-log repo) when
+# the HUD asks.
+#
+#   streak summary    the HUD's line and briefing sentences (facts on stdin: now)
+#
+# Quiet when today is logged or paused. Not logged: a gentle mention, then from
+# 18:00 (sources.streak.urgent_from, an hour) attention and an urgent sentence.
+# A pause starting within two days gets a heads-up.
+emulate -L zsh
+setopt pipefail
+path=(/opt/homebrew/bin $path)
+
+conf=${PANEL_SOURCE_CONFIG:-'{}'}
+STREAK="${${$(jq -r '.command // empty' <<<"$conf"):-$HOME/.scripts/streak}/#\~/$HOME}"
+
+summary() {
+  local facts="$(cat)" state
+  # STREAK_STATE: a state to use instead (tests)
+  state="${STREAK_STATE:-$($STREAK json 2>/dev/null)}" || { print '{}'; return }   # no repo yet: nothing to say
+  [[ -n $state ]] || { print '{}'; return }
+  jq -c -L "${PANEL_CONFIG_DIR:-$HOME/.config/panel}/lib" --argjson s "$state" \
+    --argjson urgent "$(jq -r '.urgent_from // 18' <<<"$conf")" 'include "summary";
+    (.now | localtime) as $lt | $lt[3] as $hour
+    | (.now | strflocaltime("%Y-%m-%d")) as $today
+    | ($s.streak // 0) as $n | ($s.freezes // 0) as $fz
+    | ($n | count("day"; "days")) as $days
+    | def day: strptime("%Y-%m-%d") | mktime;
+    # a pause starting soon (today excluded): a heads-up
+    ([$s.upcoming[]? | select(.from > $today and ((.from | day) - ($today | day)) <= 2 * 86400)] | first) as $soon
+    | (if $soon then (($soon.from | day | strftime("%A")) as $wd
+        | ["\($soon.note // "A pause") starts \($wd); your streak is paused from then.",
+           "Heads up: your streak pauses on \($wd)\(if $soon.note then " for \($soon.note)" else "" end)."]) else [] end) as $pause
+    | if $s.paused_today then
+        {line: "paused\(if $s.paused_today.note? then " (\($s.paused_today.note))" else "" end)", word: "paused"}
+      elif $s.today then
+        {line: "\($n) days · logged", word: "logged"} + (if ($pause | length) > 0 then {brief: $pause} else {} end)
+      elif $hour >= $urgent then
+        {line: "\($n) days · not logged", word: "not logged", state: "attention",
+         brief: (if $n == 0 then ["You haven\u0027t logged today. It\u0027s a good night to start a streak.",
+                                  "Today isn\u0027t logged yet: one target is enough to start a streak."]
+                 elif $fz > 0 then ["Your streak is at \($days) and today isn\u0027t logged. A freeze would cover it, but why spend one?",
+                                    "\($days | cap) on the line: log today before midnight, or a freeze goes."]
+                 else ["Your streak is at \($days), and today isn\u0027t logged. Log it before midnight.",
+                       "\($days | cap) on the line, and no freezes left: log today before midnight.",
+                       "Don\u0027t lose \($days): today still needs logging."] end)}
+      else
+        {line: "\($n) days · not logged yet", word: "not logged",
+         brief: (if $n == 0 then ["You can start a streak today: one target is enough."]
+                 else ["Your streak is at \($days); today isn\u0027t logged yet.",
+                       "Today isn\u0027t logged yet. Your streak stands at \($days).",
+                       "\($days | cap) and counting, once today is logged."] end)}
+      end' <<<"$facts"
+}
+
+case $1 in
+  summary) summary ;;
+  *) print -u2 "usage: streak summary < facts.json   (a HUD-only source: no fetch)"; exit 1 ;;
+esac

@@ -224,6 +224,12 @@ library only).
   so "attention" can mean new trouble only: a stack that failed within the
   window, not one failed for months (that only shows in the grey line). The HUD itself only adds the greeting, panes
   that aren't reporting, and the sign-off.
+- **HUD-only sources** (`assistant.sources`): no pane, window or fetch, just a
+  summary when the HUD asks, and a key that runs their `open` command. The
+  `streak` source reads `streak json` (the shared streak-log repo): quiet when
+  today is logged or paused (with a heads-up before a pause), a gentle mention
+  when it isn't, attention and an urgent sentence from 18:00
+  (`sources.streak.urgent_from`); `s` opens the streak logger.
 - **Per machine** (`assistant` in the config): mando is A.D.A. ("Always
   Diligent Assistant", voice `bf_isabella`), mantis is I.R.I.S. ("Intelligent
   Reporting & Insight System", a blend of `af_jessica` and `af_river`).

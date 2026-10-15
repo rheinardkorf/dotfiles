@@ -50,7 +50,10 @@
 #   seen_after                                        e.g. "2s"
 #   pause_when_idle                                   no fetching after this long without
 #                                                     keyboard or mouse (default "10m", "0" = never)
-#   assistant                                         the HUD's {name, meaning, voice, lang, user}
+#   assistant                                         the HUD's {name, meaning, voice, lang, user,
+#                                                     sources: [{source, title, key, open}]: HUD-only
+#                                                     sources (no pane: just a summary; the key
+#                                                     runs "open")}
 #                                                     (voice: a Kokoro voice, or a blend
 #                                                     {"af_jessica": 0.5, "af_river": 0.5})
 #   glow_style                                        glow style name or JSON path
@@ -731,7 +734,10 @@ hud() {
           else ($P.views | if type == "object" then keys_unsorted else . end)[] as $v
             | {unit: "\($p)/\($v)", pane: $p, view: $v, source: $P.source, title: ($P.title // $p), key: $P.key, summary: wants($v),
                recent: $P.recent,
-               hidden: ($v | IN(($P.hidden_views // [])[]))} end ] }' > $job || die "can't read the config"
+               hidden: ($v | IN(($P.hidden_views // [])[]))} end ]
+        # HUD-only sources (assistant.sources): no pane, window or fetch; asked for a summary
+        + [(.assistant.sources // [])[] | {unit: "hud/\(.source)", pane: "hud:\(.source)", view: null, source: .source,
+            title: (.title // .source), key: .key, open: .open, hidden: false, summary: true, hud_only: true}] }' > $job || die "can't read the config"
   [[ $mode == window ]] || exec python3 -I "$PANEL_CONFIG_DIR/hud/hud.py" $job
   python3 -I "$PANEL_CONFIG_DIR/hud/hud.py" $job
 }
