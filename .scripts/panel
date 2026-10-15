@@ -36,6 +36,10 @@
 #                     HUD (its source's `summary`; default: all)
 #            recent: "24h"  how far back "recent" reaches for its summaries (e.g. only
 #                           stacks that failed within it need attention; default 24h)
+#            actions: {"alt-r": {"tag": "later", "icon": "󰃀", "name": "read later"}}
+#                     keys that toggle a tag on the item under the cursor (shown as
+#                     its icon); a view whose query is "tagged:later" lists the
+#                     pane's tagged items (built from the cache, never fetched)
 #            key: "a"   its key on the HUD (jumps to its window; case matters,
 #                       digits work; default: a letter of its title)
 #            hidden_views: [view, ...]: not in the tab rotation, header or counts
@@ -70,6 +74,8 @@
 #                            only (panel renders it with glow)
 #   <source> search <words>  optional: "<id>\t<snippet>" for each cached item whose
 #                            content has all the words (used by alt-f)
+#   <source> action <tag> <id> on|off   optional: a tag was toggled (e.g. rss keeps
+#                            a copy of a saved article, so it outlives its feed)
 #   <source> summary <view>  optional: the HUD's line for a view, from its facts on
 #                            stdin ({view, count, unseen, bad, next, error, now, recent, items}):
 #                            prints {line, state: "attention", word, brief: [phrasings
@@ -136,14 +142,17 @@ seconds() {   # 30s / 2m / 1h -> seconds
 
 # One pane's settings, loaded once per run (load_pane) and read from memory after:
 # a view switch asks about the same pane many times, and each jq costs ~10 ms.
-typeset -g LOADED_PANE="" P_SOURCE="" P_TITLE="" P_LIST="" P_PREVIEW="" P_COUNT=""
+typeset -g LOADED_PANE="" P_SOURCE="" P_TITLE="" P_LIST="" P_PREVIEW="" P_COUNT="" P_ICONS="{}" P_ACTIONS=""
 typeset -ga P_VIEWS P_HIDDEN
 load_pane() {
   local -a f
   f=( "${(@f)$(conf --arg p "${1%%/*}" '.panes[$p] // {} | [.source // "", .title // $p,
       (.views // [] | if type == "object" then keys_unsorted else . end | join("\u001f")),
-      (.hidden_views // [] | join("\u001f")), .list // "", .preview // "", (.count != false | tostring)] | .[]')}" )
+      (.hidden_views // [] | join("\u001f")), .list // "", .preview // "", (.count != false | tostring),
+      (.actions // {} | [.[] | {(.tag): (.icon // "★")}] | add // {} | tojson),
+      (.actions // {} | to_entries | map("\(.key)\u001f\(.value.tag)") | join("\u001e"))] | .[]')}" )
   LOADED_PANE=${1%%/*} P_SOURCE=$f[1] P_TITLE=$f[2] P_LIST=$f[5] P_PREVIEW=$f[6] P_COUNT=$f[7]
+  P_ICONS=${f[8]:-\{\}} P_ACTIONS=$f[9]
   P_VIEWS=( ${(ps:\x1f:)f[3]} ) P_HIDDEN=( ${(ps:\x1f:)f[4]} )
 }
 # pane_counts <pane>: does it add to its window's ●N? ("count": false says no)
@@ -233,6 +242,15 @@ fetch_pane() {   # fetch_pane <unit>
   mkdir -p $dir
   : >> $dir/lock
   zsystem flock -t 0 -f fd $dir/lock 2>/dev/null || return 2   # already fetching
+  if [[ $query == tagged:* ]]; then   # a tag view: the pane's tagged items, newest first
+    tags_json | jq --arg src $source --arg tag ${query#tagged:} \
+      '[to_entries[] | select(.key | startswith($src + ":")) | .value[$tag] // empty | .item + {tagged_at: .at}]
+       | sort_by(-.tagged_at)' > $dir/.items && mv $dir/.items $dir/items.json
+    jq -n --argjson t $EPOCHSECONDS '{ok_at: $t, fetched_at: $t}' > $dir/.meta && mv $dir/.meta $dir/meta.json
+    exec {fd}>&-
+    notify $pane
+    return 0
+  fi
   since="$(jq -r '.ok_at // empty' $dir/meta.json 2>/dev/null)"
   out="$(mktemp $dir/.items.XXXX)" err="$(mktemp $dir/.err.XXXX)"
   # stdin from /dev/null: a fetch must never wait on the terminal it runs in
@@ -325,6 +343,36 @@ event() {
 # --- seen -----------------------------------------------------------------------
 # seen.json: {"<source>:<id>": <updated when you saw it>}. Global, no content.
 SEEN="$PANEL_CACHE/seen.json"
+
+# tags.json: {"<source>:<id>": {"<tag>": {item, unit, at}}}: actions (alt-r "read
+# later") toggle them; the item is kept with its tag, for the tag views.
+TAGS="$PANEL_CACHE/tags.json"
+tags_json() { [[ -s $TAGS ]] && cat $TAGS || print '{}' }
+
+# toggle_tag <pane> <pid> <id> <tag>: on the item under the cursor, then tell the
+# source (on / off) and rebuild the pane's tag views
+toggle_tag() {
+  local pane=$1 unit="$(cur_unit $1 $2)" id=$3 tag=$4 source fd tmp state u
+  source="$(pane_source $pane)"
+  [[ -n $id && -n $tag && -f "$PANEL_CACHE/panes/$unit/items.json" ]] || return 0
+  : >> $PANEL_CACHE/tags.lock
+  zsystem flock -f fd $PANEL_CACHE/tags.lock || return 1
+  tmp="$(mktemp $PANEL_CACHE/.tags.XXXX)"
+  tags_json | jq --arg k "$source:$id" --arg id $id --arg tag $tag --arg unit $unit --argjson now $EPOCHSECONDS \
+    --slurpfile items "$PANEL_CACHE/panes/$unit/items.json" '
+    ($items[0] | map(select(.id == $id)) | first) as $it
+    | if .[$k][$tag] then del(.[$k][$tag]) | (if .[$k] == {} then del(.[$k]) else . end)
+      elif $it then .[$k][$tag] = {item: $it, unit: $unit, at: $now}
+      else . end' > $tmp && mv $tmp $TAGS
+  jq -e --arg k "$source:$id" --arg tag $tag '.[$k][$tag]' $TAGS >/dev/null 2>&1 && state=on || state=off
+  exec {fd}>&-
+  run_source $source action $tag $id $state < /dev/null > /dev/null 2>&1
+  for u in ${(f)"$(pane_units $pane)"}; do
+    [[ "$(conf --arg p $pane --arg v ${u#*/} '.panes[$p].views | if type == "object" then .[$v] else $v end')" == tagged:* ]] &&
+      fetch_pane $u
+  done
+  return 0
+}
 seen_json() { [[ -s $SEEN ]] && cat $SEEN || print '{}' }
 
 # Shared by the list and the counts: is this item new / changed / seen?
@@ -438,8 +486,9 @@ lines() {   # lines <pane> <pid>
   if [[ $P_LIST == title && -n $FZF_COLUMNS ]]; then
     width=$FZF_COLUMNS; [[ $P_PREVIEW == side ]] && width=$(( FZF_COLUMNS * 30 / 100 ))
   fi
+  [[ -s $TAGS ]] || print '{}' > $TAGS
   jq -r --arg src "$(pane_source $pane)" --argjson now $EPOCHSECONDS --arg tabs "$tabs" \
-    --arg list "$P_LIST" --argjson width $width \
+    --arg list "$P_LIST" --argjson width $width --argjson icons "${P_ICONS:-\{\}}" --slurpfile tags $TAGS \
     --argjson matches "$matches" --arg words "$words" \
     --argjson seen "$(seen_json)" --argjson m "$(cat $dir/meta.json 2>/dev/null || print '{}')" \
     "$JQ_STATE"'
@@ -471,6 +520,10 @@ lines() {   # lines <pane> <pid>
       + (if $matches then rgb("249;226;175") + "find \"\($words)\": \(length) match\(if length == 1 then "" else "es" end)  ·  " + $off else "" end)
       + if $m.error then rgb("243;139;168") + "fetch failed at \($m.fetched_at | hm): \($m.error | split("\n")[0])  ·  showing \($m.ok_at | hm)" + $off
              else $dim + "fetched \($m.ok_at | hm)  ·  \(length) items  ·  ● new  ◆ changed" + $off end ),
+    # tag icons (panes with actions): a column after the marker
+    def icon: if ($icons | length) == 0 then "" else
+      (($tags[0]["\($src):\(.id)"] // {}) | keys | map($icons[.] // empty) | join("")) as $i
+      | rgb("249;226;175") + (if $i == "" then " " else $i end) + $off + " " end;
     ( .[] | state($seen; $src) as $st
       | ($palette[.mark_color // ""] // (if $st == "new" then $palette.o else $palette.y end)) as $mc
       | (if $st == "seen" then " " else rgb($mc) + (.mark // (if $st == "new" then "●" else "◆" end)) + $off end) as $mark
@@ -478,9 +531,9 @@ lines() {   # lines <pane> <pid>
           (.at // .updated | age) as $a | (.title // "" | sub("^\\s+"; "")) as $t
           | (if $width > 0 then $width - ($a | length) - 9 else 1000 end) as $tw
           # shortened or padded to the same width, so the ages line up
-          | "\(.id)\t\($mark) \(if ($t | length) > $tw then $t[0:$tw - 1] + "…" elif $width > 0 then $t + " " * ($tw - ($t | length)) else $t end)  \($dim)\($a)\($off)"
+          | "\(.id)\t\($mark) \(icon)\(if ($t | length) > $tw then $t[0:$tw - 1] + "…" elif $width > 0 then $t + " " * ($tw - ($t | length)) else $t end)  \($dim)\($a)\($off)"
         else
-        "\(.id)\t\($mark) \(if $w > 0 then $bold + (.key // .id | pad($w + 2)) + $off + " " else "" end)\(if $palette[.status_color // ""] then $off + rgb($palette[.status_color]) else $dim end)\(.status // "" | pad($sw + 1))\($off)\($dim) \(.at // .updated | age | pad(7))\($off) \(if $kw > 0 then spark + "  " else "" end)\(.title // "" | sub("^\\s+"; ""))" end )
+        "\(.id)\t\($mark) \(icon)\(if $w > 0 then $bold + (.key // .id | pad($w + 2)) + $off + " " else "" end)\(if $palette[.status_color // ""] then $off + rgb($palette[.status_color]) else $dim end)\(.status // "" | pad($sw + 1))\($off)\($dim) \(.at // .updated | age | pad(7))\($off) \(if $kw > 0 then spark + "  " else "" end)\(.title // "" | sub("^\\s+"; ""))" end )
   ' $dir/items.json
   update_window_name
 }
@@ -531,15 +584,22 @@ prompt() {
   if [[ $unit == */* ]]; then print -r -- "$title › ${unit#*/} › $find"; else print -r -- "$title › $find"; fi
 }
 
-# switch_view <pane> <pid> <+1|-1> [id]: show the next / previous view. Each view
-# keeps its own cursor: the item under it (id) is remembered for the view being
-# left, and restored when the new view's list has loaded (restore_cursor).
+# remember_cursor <pane> <pid> <id>: the item under the cursor of the view being
+# left (tab runs it first; fzf skips it when the list is empty, and the switch
+# still happens)
+remember_cursor() {
+  local cur="$(cur_unit $1 $2)"
+  [[ -n $3 ]] && print -r -- $3 > "$PANEL_CACHE/panes/$1/cursor.$2.${cur#*/}"
+}
+
+# switch_view <pane> <pid> <+1|-1>: show the next / previous view. Each view keeps
+# its own cursor: remembered on the way out (remember_cursor), restored when the
+# new view's list has loaded (restore_cursor).
 switch_view() {
   local -a views=( ${(f)"$(visible_views $1 $2)"} )
   local cur i dir="$PANEL_CACHE/panes/$1"
   (( $#views )) || return 0
   cur="$(cur_unit $1 $2)"; cur=${cur#*/}
-  [[ -n $4 ]] && print -r -- $4 > $dir/cursor.$2.$cur
   i=${views[(Ie)$cur]}
   i=$(( (i - 1 + $3 + $#views) % $#views + 1 ))
   print -r -- $views[i] > $dir/view.$2
@@ -606,6 +666,11 @@ view() {
   [[ -n $TMUX_PANE ]] && tmux set-option -p -t $TMUX_PANE @panel_pane $pane
   # where the preview goes: the default (beside the list only if the preview
   # gets 110 columns, else under it), or the pane's own "preview"
+  # the pane's actions: each key toggles its tag on the item under the cursor
+  local -a acts=() a
+  for a in ${(ps:\x1e:)P_ACTIONS}; do
+    acts+=( --bind "${a%%$'\x1f'*}:execute-silent($self _tag $pane $$ {1} ${a#*$'\x1f'})+reload($self _lines $pane $$)" )
+  done
   local pw="$(conf --arg p $pane '.panes[$p].preview // empty')"
   case $pw in
     ("")   pw='right,60%,wrap,border-left,<110(down,65%,wrap,border-top)' ;;
@@ -636,10 +701,10 @@ view() {
       --bind "change:reload($self _find $me {q})" \
       --bind "alt-f:transform($self _toggle_find $me)" \
       --bind "alt-h:transform($self _reveal $me)" \
-      --bind "tab:execute-silent($self _view $me 1 {1})+$redraw" \
-      --bind "shift-tab:execute-silent($self _view $me -1 {1})+$redraw" \
+      --bind "tab:execute-silent($self _remember $me {1})+execute-silent($self _view $me 1)+$redraw" \
+      --bind "shift-tab:execute-silent($self _remember $me {1})+execute-silent($self _view $me -1)+$redraw" \
       --bind "load:transform($self _cursor $me {q})" \
-      --bind "home:first" --bind "end:last"
+      --bind "home:first" --bind "end:last" $acts
     sleep 0.5
     changed && exec $self view $pane
   done
@@ -733,7 +798,7 @@ up() {
 }
 
 # The per-view commands fzf runs all start with a pane: load its settings once
-[[ $1 == (view|_lines|_prompt|_toggle_find|_esc|_reveal|_find|_view|_fetch_now|_preview|_focus|_open|_seen_all|_unseen) && -n $2 ]] && load_pane $2
+[[ $1 == (view|_tag|_remember|_lines|_prompt|_toggle_find|_esc|_reveal|_find|_view|_fetch_now|_preview|_focus|_open|_seen_all|_unseen) && -n $2 ]] && load_pane $2
 
 # Commands you run: stop at a missing config, before anything else complains
 [[ $1 == (up|fetch|fetcher|view|hud) ]] && conf empty
@@ -755,8 +820,10 @@ case $1 in
   _esc)      esc_key $2 $3 ;;
   _reveal)   toggle_reveal $2 $3 ;;
   _find)     find_words $2 $3 "$4" ;;
-  _view)     switch_view $2 $3 $4 $5 ;;
+  _view)     switch_view $2 $3 $4 ;;
+  _remember) remember_cursor $2 $3 $4 ;;
   _cursor)   restore_cursor $2 $3 "$4" ;;
+  _tag)      toggle_tag $2 $3 $4 $5 ;;
   _fetch_now) fetch_pane "$(cur_unit $2 $3)" ;;
   _preview)  preview $2 $3 $4 ;;
   _focus)    on_focus "$(cur_unit $2 $3)" $4 ;;

@@ -81,7 +81,9 @@
       "preview": "side",
       "list": "title",
       // unread articles aren't worth a ●N in the window name
-      "count": false
+      "count": false,
+      // alt-r: read later (the "later" view, from config.local.json, lists them)
+      "actions": {"alt-r": {"tag": "later", "icon": "󰃀", "name": "read later"}}
     },
 
     // AWS prod, one pane with views (tab switches): alarms, CloudFormation stacks, DynamoDB tables, SQS queues

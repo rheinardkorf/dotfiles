@@ -162,6 +162,17 @@ calendar tracks a recurring series rather than each instance, SQS only changes
 when a dead-letter queue gains messages, DynamoDB only when its config
 fingerprint changes, and contributions never.
 
+## Actions and tags
+
+A pane's `actions` map keys to tags: `"alt-r": {"tag": "later", "icon": "󰃀"}`.
+The key toggles the tag on the item under the cursor (kept in `tags.json`, with
+a copy of the item, under a lock), the row shows the icon, and a view whose
+query is `tagged:later` lists the pane's tagged items, newest first, built from
+the cache (never fetched). The source hears about it (`action <tag> <id>
+on|off`): rss keeps a copy of a saved article and its picture in `saved.json`,
+so it outlives its feed. The HUD mentions the reading list through rss's
+summary of the `later` view.
+
 ## 5. Keys (terminal → kitty → fzf)
 
 | Key | Does |
@@ -171,6 +182,7 @@ fingerprint changes, and contributions never.
 | cmd+shift+h (alt-h) | show / hide the pane's hidden views |
 | enter / ctrl-o | full preview / open in the browser (agents: jump to the tmux pane) |
 | alt-s / alt-u | mark all seen / mark this one unseen |
+| alt-r (rss) | read later: toggle the article on the reading list (a pane's `actions`) |
 | ctrl-r | fetch this view now |
 | home / end | top / bottom of the list (page up / down: a page) |
 | esc | clear the filter (or leave find) |

@@ -7,6 +7,8 @@
                             summary has all the words
     rss summary <view>      the HUD's line and briefing sentences for a category,
                             from the facts on stdin (JSON)
+    rss action later <id> on|off   saved for later (alt-r): keep a copy of the
+                            article (and its picture) so it outlives its feed
 
 The query is the pane's (or view's) list of feeds, as JSON: URLs, or
 {"url": ..., "name": ...} to choose the short name shown in the list. A pane
@@ -46,6 +48,7 @@ CACHE = os.environ.get("PANEL_SOURCE_CACHE") or sys.exit("rss: run me through pa
 FEEDS = os.path.join(CACHE, "feeds")
 KEEP, KEEP_DAYS = 50, 30
 IMAGES = os.path.join(CACHE, "images")
+SAVED = os.path.join(CACHE, "saved.json")   # articles saved for later: {id: article + feed}
 IMAGE_JOBS = 60          # at most this many image lookups per fetch (the rest wait)
 IMAGE_MAX = 8_000_000    # bytes
 UA = "panel-rss/1.0 (+https://github.com/rheinardkorf/dotfiles)"
@@ -257,8 +260,9 @@ def images(paths):
             if aid in st.get("articles", {}):
                 st["articles"][aid].update(image_tried=True, image=png)
         save(path, st)
-    # drop pictures no feed (in any view) still has an article for
+    # drop pictures no feed (in any view) or saved article still has
     used = {a.get("image") for f in all_feeds() for a in load(f, {}).get("articles", {}).values()}
+    used |= {a.get("image") for a in load(SAVED, {}).values()}
     for name in os.listdir(IMAGES):
         if os.path.join(IMAGES, name) not in used:
             os.unlink(os.path.join(IMAGES, name))
@@ -335,10 +339,32 @@ def plain(s):
 
 
 def articles():
+    """Every cached article: the feeds', then saved ones no longer in a feed."""
+    seen = set()
     for name in os.listdir(FEEDS) if os.path.isdir(FEEDS) else []:
         st = load(os.path.join(FEEDS, name), {})
         for aid, a in st.get("articles", {}).items():
+            seen.add(aid)
             yield aid, a, st
+    for aid, a in load(SAVED, {}).items():
+        if aid not in seen:
+            yield aid, a, {"title": a.get("feed_title"), "url": a.get("feed_url", "")}
+
+
+def action(tag, aid, state):
+    """later on: keep a copy of the article; off: let it go."""
+    if tag != "later":
+        return
+    saved = load(SAVED, {})
+    if state == "off":
+        saved.pop(aid, None)
+    elif aid not in saved:
+        for i, a, st in articles():
+            if i == aid:
+                saved[aid] = dict(a, feed_title=st.get("title"), feed_url=st.get("url"), saved_at=int(time.time()))
+                break
+    os.makedirs(CACHE, exist_ok=True)
+    save(SAVED, saved)
 
 
 def preview(aid):
@@ -377,6 +403,14 @@ def count(n, one, many):
 
 def summary(view):
     f = json.load(sys.stdin)
+    if view == "later":   # the reading list: how long it is, not what's new
+        n = f.get("count", 0)
+        if not n:
+            return print(json.dumps({}))
+        return print(json.dumps({"line": f"{n} saved for later", "brief": [
+            f"{count(n, 'article', 'articles').capitalize()} saved for later.",
+            f"You have {count(n, 'article', 'articles')} waiting to be read.",
+            f"Your reading list has {count(n, 'article', 'articles')}."]}))
     where, n = view or "your feeds", f.get("unseen", 0)
     if not n:
         return print(json.dumps({"line": f"{f.get('count', 0)} in {where}", "word": "synced"}))
@@ -397,5 +431,7 @@ if __name__ == "__main__":
         search(arg)
     elif cmd == "summary":
         summary(arg)
+    elif cmd == "action":
+        action(arg, sys.argv[3] if len(sys.argv) > 3 else "", sys.argv[4] if len(sys.argv) > 4 else "")
     else:
         sys.exit("usage: rss fetch '<feeds json>' | rss preview <id> | rss search <words>")
