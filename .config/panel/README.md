@@ -60,6 +60,7 @@ Each source is a small zsh script in `sources/` with up to three commands:
 | `fetch <query>` | prints the list as JSON items, and caches whatever previews will need | the **only** place that calls an API |
 | `preview <id>` | prints one item as **Markdown** | reads the **cache only** |
 | `search <words>` | prints `id<TAB>snippet` for items whose content matches | cache only (optional) |
+| `summary <view>` | the HUD's say on a view: reads its facts (count, unseen, bad, next, error, items) on stdin, prints `{line, state, word, brief, ticker}` | cache only (optional) |
 | `event` | records an event pushed to it on stdin (`panel event <source>`); exit 0 when something changed, printing ids to mark seen | optional; writes only to its cache |
 
 Every item has the same basic shape: `id`, `title`, `status`, `updated`
@@ -193,6 +194,15 @@ library only).
 - **Briefing**: spoken on open and typed along. `hud/speak.py` uses Kokoro (an
   offline voice model in `~/.local/share/kokoro`, run through `uv`), one
   sentence at a time, each cached by its text; without Kokoro it uses `say`.
+- **Sources describe themselves**: the HUD knows no service. For each view it
+  runs the source's `summary` (in parallel), which returns its line under the
+  system, `state: "attention"` (row in peach, said first), the row's `word`
+  (linked, nominal, ...), `brief` (phrasings of one spoken sentence, one picked
+  at random) and `ticker` extras. Helpers for jq sources (number words,
+  durations) are in `lib/summary.jq`. A pane's `summary` setting picks which
+  views are asked (default all; aws asks only alarms and sqs); a source without
+  `summary` gets a plain count. The HUD itself only adds the greeting, panes
+  that aren't reporting, and the sign-off.
 - **Per machine** (`assistant` in the config): mando is A.D.A. ("Always
   Diligent Assistant", voice `bf_isabella`), mantis is I.R.I.S. ("Intelligent
   Reporting & Insight System", a blend of `af_jessica` and `af_river`).

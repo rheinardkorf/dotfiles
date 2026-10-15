@@ -513,7 +513,27 @@ preview() {
   ' $f
 }
 
+# summary <view>: the HUD's line (and briefing sentences) for one view, from the
+# facts on stdin (see ~/.config/panel/lib/summary.jq); prints JSON
+summary() {
+  jq -c -L "${PANEL_CONFIG_DIR:-$HOME/.config/panel}/lib" 'include "summary";
+    if .view == "alarms" then
+      if .bad > 0 then (.bad | count("alarm"; "alarms")) as $a | (if .bad == 1 then "is" else "are" end) as $are
+        | {line: "\(.bad) alarms firing", state: "attention",
+           brief: ["\(.bad | count("prod alarm"; "prod alarms") | cap) \($are) firing.", "Prod has \($a) going off.",
+                   "Heads up: \($a) firing in prod."]}
+      else {line: "\(.count) alarms quiet", word: "nominal",
+            brief: ["Prod is nominal.", "Prod is quiet.", "All quiet in prod.", "Prod is calm. No alarms."]} end
+    elif .view == "sqs" then
+      if .bad > 0 then {line: "\(.bad) DLQs with messages", state: "attention",
+        brief: ["There are messages in the dead letter queues.", "Something is landing in the dead letter queues.",
+                "The dead letter queues are not empty."]}
+      else {line: "DLQs empty", word: "nominal"} end
+    else {} end'
+}
+
 case $1 in
+  summary) summary "$2" ;;
   fetch)
     case $2 in
       alarms)         fetch_alarms ;;

@@ -32,6 +32,8 @@
 #            list: "title" shows rows as the title, then its age (no key, status
 #                  or spark columns), e.g. for reading
 #            or {name: {type: "hud", title}}          the assistant HUD as a window
+#            summary: true / false / [view, ...]: which views describe themselves on the
+#                     HUD (its source's `summary`; default: all)
 #            key: "a"   its key on the HUD (jumps to its window; case matters,
 #                       digits work; default: a letter of its title)
 #            hidden_views: [view, ...]: not in the tab rotation, header or counts
@@ -66,6 +68,10 @@
 #                            only (panel renders it with glow)
 #   <source> search <words>  optional: "<id>\t<snippet>" for each cached item whose
 #                            content has all the words (used by alt-f)
+#   <source> summary <view>  optional: the HUD's line for a view, from its facts on
+#                            stdin ({view, count, unseen, bad, next, error, now, items}):
+#                            prints {line, state: "attention", word, brief: [phrasings
+#                            of one sentence], ticker: [...]} (~/.config/panel/lib/summary.jq)
 #   <source> event           optional: an event on stdin (panel event); exit 0 when
 #                            something changed (the source's panes are fetched again),
 #                            printing the ids of items to mark seen
@@ -628,14 +634,18 @@ hud() {
   [[ -n $user ]] || user="$(id -F 2>/dev/null)"; user=${user%% *}
   job="$(mktemp "${TMPDIR:-/tmp}/panel-hud.XXXXXX")"
   # every unit of the layout, in order, with what the HUD needs to know about it
-  conf --arg l "$(default_layout)" --arg user "$user" --arg cache "$PANEL_CACHE" --arg mode $mode '
+  conf --arg l "$(default_layout)" --arg user "$user" --arg cache "$PANEL_CACHE" --arg mode $mode \
+    --arg config_dir "$PANEL_CONFIG_DIR" '
     . as $c | {assistant: (.assistant // {}), user: $user, cache: $cache, mode: $mode,
-      windows: ($c.layouts[$l] // {}),
+      windows: ($c.layouts[$l] // {}), sources: ($c.sources // {}), config_dir: $config_dir,
       units: [ reduce ($c.layouts[$l][][]) as $p ([]; if any(.[]; . == $p) then . else . + [$p] end) | .[]
         | . as $p | $c.panes[$p] as $P | select($P.source)
-        | if $P.views == null then {unit: $p, pane: $p, view: null, source: $P.source, title: ($P.title // $p), key: $P.key, hidden: false}
+        # does the HUD ask this unit for a summary? pane "summary": true (default), false, or [views]
+        | def wants($v): ($P.summary // true) as $s | if ($s | type) == "array" then ($v | IN($s[])) else $s end;
+        if $P.views == null then {unit: $p, pane: $p, view: null, source: $P.source, title: ($P.title // $p), key: $P.key,
+                                    hidden: false, summary: ($P.summary // true | if type == "array" then true else . end)}
           else ($P.views | if type == "object" then keys_unsorted else . end)[] as $v
-            | {unit: "\($p)/\($v)", pane: $p, view: $v, source: $P.source, title: ($P.title // $p), key: $P.key,
+            | {unit: "\($p)/\($v)", pane: $p, view: $v, source: $P.source, title: ($P.title // $p), key: $P.key, summary: wants($v),
                hidden: ($v | IN(($P.hidden_views // [])[]))} end ] }' > $job || die "can't read the config"
   [[ $mode == window ]] || exec python3 -I "$PANEL_CONFIG_DIR/hud/hud.py" $job
   python3 -I "$PANEL_CONFIG_DIR/hud/hud.py" $job

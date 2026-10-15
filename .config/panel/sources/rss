@@ -5,6 +5,8 @@
     rss preview <id>        an article as Markdown (from the feed, cached)
     rss search <words>      "<id>\t<snippet>" for cached articles whose title or
                             summary has all the words
+    rss summary <view>      the HUD's line and briefing sentences for a category,
+                            from the facts on stdin (JSON)
 
 The query is the pane's (or view's) list of feeds, as JSON: URLs, or
 {"url": ..., "name": ...} to choose the short name shown in the list. A pane
@@ -366,6 +368,24 @@ def search(words):
             print(f"{aid}\t{txt[max(0, i - 40):i + 70]}".replace("\n", " "))
 
 
+WORDS = "no one two three four five six seven eight nine ten eleven twelve".split()
+
+
+def count(n, one, many):
+    return f"{WORDS[n] if 0 <= n < len(WORDS) else n} {one if n == 1 else many}"
+
+
+def summary(view):
+    f = json.load(sys.stdin)
+    where, n = view or "your feeds", f.get("unseen", 0)
+    if not n:
+        return print(json.dumps({"line": f"{f.get('count', 0)} in {where}", "word": "synced"}))
+    print(json.dumps({"line": f"{n} new in {where}", "word": "synced", "brief": [
+        f"{count(n, 'new article', 'new articles').capitalize()} in {where}.",
+        f"{where.capitalize()} has {count(n, 'new read', 'new reads')}.",
+        f"{count(n, 'new story', 'new stories').capitalize()} in {where}."]}))
+
+
 if __name__ == "__main__":
     cmd = sys.argv[1] if len(sys.argv) > 1 else ""
     arg = sys.argv[2] if len(sys.argv) > 2 else ""
@@ -375,5 +395,7 @@ if __name__ == "__main__":
         preview(arg)
     elif cmd == "search":
         search(arg)
+    elif cmd == "summary":
+        summary(arg)
     else:
         sys.exit("usage: rss fetch '<feeds json>' | rss preview <id> | rss search <words>")

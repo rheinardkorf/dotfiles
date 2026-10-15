@@ -223,7 +223,27 @@ search() {
     | [.key, ($text[$from:$i + 70] | if $from > 0 then sub("^\\S*\\s"; "") else . end | gsub("\\t"; " "))] | @tsv' $files
 }
 
+# summary <view>: the HUD's line (and briefing sentences) for one view, from the
+# facts on stdin (see ~/.config/panel/lib/summary.jq); prints JSON
+summary() {
+  jq -c -L "${PANEL_CONFIG_DIR:-$HOME/.config/panel}/lib" 'include "summary";
+    ((.next.at // 0) - .now) as $in
+    | if .view == "assigned" then {line: "\(.count) assigned", word: "linked"}
+      elif .view == "mentioned" then {line: (if .unseen > 0 then "\(.unseen) new mentions" else null end), word: "linked"}
+      elif .view == "sla" then
+        if .next then
+          {line: "SLA in \($in | span)"}
+          + (if .bad > 0 then {state: "attention"} else {word: "linked"} end)
+          + (if $in < 86400 then {brief: ["The next SLA breach is in \($in | spoken).",
+              "Your nearest SLA deadline is \($in | spoken) away.", "An SLA comes due in \($in | spoken)."]} else {} end)
+        elif .bad > 0 then {line: "\(.bad) SLA breached", state: "attention",
+          brief: ["\(.bad | count("SLA has"; "SLAs have") | cap) been breached."]}
+        else {word: "linked"} end
+      else {} end'
+}
+
 case $1 in
+  summary) summary "$2" ;;
   fetch)   if [[ $2 == sla:* ]]; then fetch_sla "${2#sla:}"; else fetch "$2"; fi ;;
   preview) preview "$2" ;;
   search)  search "$2" ;;

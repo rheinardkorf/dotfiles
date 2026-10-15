@@ -123,7 +123,21 @@ search() {
     | [.id, ($text[$from:$i + 70] | if $from > 0 then sub("^\\S*\\s"; "") else . end | gsub("\\t"; " "))] | @tsv' $cache/events.json
 }
 
+# summary <view>: the HUD's line (and briefing sentences) for one view, from the
+# facts on stdin (see ~/.config/panel/lib/summary.jq); prints JSON
+summary() {
+  jq -c -L "${PANEL_CONFIG_DIR:-$HOME/.config/panel}/lib" 'include "summary";
+    .now as $now
+    | if .next then ((.next.at - $now) as $in | (.next.title | clean) as $t
+        | {line: "next: \($t) in \($in | span)", word: "synced",
+           ticker: [.items[] | select((.at // 0) > $now) | "\(.title | clean) in \((.at - $now) | span)"][:3]}
+          + (if $in < 4 * 3600 then {brief: ["\($t) starts in \($in | spoken).", "You have \($t) in \($in | spoken).",
+                                             "\($t) is coming up in \($in | spoken)."]} else {} end))
+      else {line: "clear", word: "synced"} end'
+}
+
 case $1 in
+  summary) summary "$2" ;;
   fetch)
     case $2 in
       upcoming|"") fetch_upcoming ;;

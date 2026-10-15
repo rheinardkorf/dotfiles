@@ -325,7 +325,24 @@ event() {
   return 0
 }
 
+# summary <view>: the HUD's line (and briefing sentences) for one view, from the
+# facts on stdin (see ~/.config/panel/lib/summary.jq); prints JSON
+summary() {
+  jq -c -L "${PANEL_CONFIG_DIR:-$HOME/.config/panel}/lib" 'include "summary";
+    def name: if (.key // "·") != "·" then .key else (.title | clean | split(" ")[0]) end;
+    [.items[] | select(.kind != null and (.id | startswith("sub:") | not))] as $s
+    | ([$s[] | select(.status == "busy")] | length) as $busy
+    | [$s[] | select(.status | startswith("?"))] as $wait
+    | ($wait | length) as $n | ($wait | map(name) | join(", ")) as $names | (if $n == 1 then "is" else "are" end) as $are
+    | {line: "\($busy) busy\(if $n > 0 then " · \($n) awaiting you" else "" end)", word: "\($s | length) online",
+       ticker: [$s[] | "\(.title | clean | split(" ")[0]) \(.status)"]}
+      + (if $n > 0 then {state: "attention",
+          brief: ["\($n | count("agent"; "agents") | cap) \($are) waiting on you: \($names).", "\($names) \($are) waiting for your input.",
+                  "You have \($n | count("agent"; "agents")) waiting: \($names).", "\($names) would like a word."]} else {} end)'
+}
+
 case $1 in
+  summary) summary "$2" ;;
   fetch)
     case $2 in
       active|"") fetch_active ;;

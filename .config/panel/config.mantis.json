@@ -89,6 +89,8 @@
       "title": "Prod",
       "source": "aws",
       "key": "a",
+      // the HUD hears from alarms and SQS; stacks and tables have nothing to say
+      "summary": ["alarms", "sqs"],
       "views": ["alarms", "cloudformation", "dynamodb", "sqs"],
       "every": {"*": "5m", "cloudformation": "15m", "dynamodb": "1h"}
     }

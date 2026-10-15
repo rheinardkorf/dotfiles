@@ -16,6 +16,7 @@ and nothing is drawn while the window is off screen.
 Run by panel, with a job file: {"assistant": {...}, "user": "...", "cache": "...",
 "units": [{unit, pane, view, title, source, hidden}, ...]}
 """
+import concurrent.futures
 import json
 import math
 import os
@@ -158,27 +159,6 @@ def load(path, default):
         return default
 
 
-def dur(s, spoken=False):
-    s = max(0, int(s))
-    if s < 3600:
-        n, u = max(1, s // 60), "minute"
-    elif s < 86400:
-        n, u = s // 3600, "hour"
-    else:
-        n, u = s // 86400, "day"
-    if spoken:
-        return f"{n} {u}{'' if n == 1 else 's'}"
-    return f"{n}{u[0] if u != 'minute' else 'm'}"
-
-
-WORDS = "no one two three four five six seven eight nine ten eleven twelve".split()
-
-
-def count_words(n, thing, plural=None):
-    word = WORDS[n] if n < len(WORDS) else str(n)
-    return f"{word} {thing if n == 1 else (plural or thing + 's')}"
-
-
 def facts(job):
     cache, now = job["cache"], time.time()
     seen = load(os.path.join(cache, "seen.json"), {})
@@ -200,38 +180,45 @@ def facts(job):
     return units
 
 
-def clean(title):
-    return ANSI.sub("", title or "").split("  ·")[0].strip()
+def summarize(job, units):
+    """Each unit describes itself: its source's `summary <view>` gets the unit's
+    facts on stdin and prints {line, state, word, brief, ticker} (all optional).
+    The sources run in parallel. f["sum"] is that, {} for a view the config
+    leaves out ("summary"), or None when the source has no summary (a plain
+    count is shown instead)."""
+    now = int(time.time())
+    config_dir = job.get("config_dir") or os.path.expanduser("~/.config/panel")
+
+    def run(f):
+        if not f.get("summary", True):
+            return {}
+        if f["missing"]:
+            return None
+        nxt = f["next"]
+        facts_in = {"view": f["view"], "count": len(f["items"]), "unseen": f["unseen"], "bad": len(f["bad"]),
+                    "next": {"title": nxt.get("title"), "at": nxt["at"]} if nxt else None,
+                    "error": f["error"], "now": now, "items": f["items"]}
+        env = dict(os.environ, PANEL_CONFIG_DIR=config_dir,
+                   PANEL_SOURCE_CACHE=os.path.join(job["cache"], "sources", f["source"]),
+                   PANEL_SOURCE_CONFIG=json.dumps((job.get("sources") or {}).get(f["source"]) or {}))
+        try:
+            r = subprocess.run([os.path.join(config_dir, "sources", f["source"]), "summary", f["view"] or ""],
+                               input=json.dumps(facts_in), capture_output=True, text=True, timeout=5, env=env)
+            out = json.loads(r.stdout) if r.returncode == 0 and r.stdout.strip() else None
+            return out if isinstance(out, dict) else None
+        except Exception:
+            return None
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
+        for f, s in zip(units, pool.map(run, units)):
+            f["sum"] = s
 
 
-def phrase(f, now):
-    """A short summary of one unit for the systems check, or None."""
-    src, view, n, bad, nxt = f["source"], f["view"], len(f["items"]), len(f["bad"]), f["next"]
-    if src == "agents":
-        busy = sum(1 for it in f["items"] if it.get("status") == "busy")
-        waiting = sum(1 for it in f["items"] if (it.get("status") or "").startswith("?"))
-        return f"{busy} busy" + (f" · {waiting} awaiting you" if waiting else "")
-    if src == "calendar":
-        return f"next: {clean(nxt['title'])} in {dur(nxt['at'] - now)}" if nxt else "clear"
-    if src == "rss":
-        return f"{f['unseen']} new in {view or 'feeds'}" if f["unseen"] else f"{n} in {view or 'feeds'}"
-    table = {
-        ("jira", "assigned"): f"{n} assigned",
-        ("jira", "mentioned"): f"{f['unseen']} new mentions" if f["unseen"] else None,
-        ("jira", "sla"): f"SLA in {dur(nxt['at'] - now)}" if nxt else (f"{bad} SLA breached" if bad else None),
-        ("github", "actions"): f"{bad} failing" if bad else "builds green",
-        ("github", "review-requests"): f"{n} reviews waiting" if n else None,
-        ("github", "my-prs"): f"{n} open PRs" if n else None,
-        ("aws", "alarms"): f"{bad} alarms firing" if bad else f"{n} alarms quiet",
-        ("aws", "sqs"): f"{bad} DLQs with messages" if bad else "DLQs empty",
-        ("aws", "cloudformation"): None, ("aws", "dynamodb"): None,
-    }
-    if (src, view) in table:
-        return table[(src, view)]
-    return f"{n} {view or 'items'}" + (f" · {f['unseen']} new" if f["unseen"] else "")
-
-
-WORD = {"jira": "linked", "github": "linked", "aws": "nominal", "calendar": "synced", "rss": "synced"}
+def line_of(f):
+    """The unit's line: its own, or (no summary command) a plain count."""
+    if f["sum"] is None:
+        return f"{len(f['items'])} {f['view'] or 'items'}" + (f" · {f['unseen']} new" if f["unseen"] else "")
+    return f["sum"].get("line")
 
 
 def systems(units, now):
@@ -247,20 +234,17 @@ def systems(units, now):
     out = []
     for pane in order:
         fs = rows[pane]
-        src = fs[0]["source"]
-        bits = [p for p in (phrase(f, now) for f in fs if not f["missing"]) if p]
+        bits = [b for b in (line_of(f) for f in fs if not f["missing"]) if b]
+        sums = [f["sum"] for f in fs if f["sum"]]
+        attention = [s for s in sums if s.get("state") == "attention"]
         if any(f["error"] for f in fs):
             state, col = "degraded", "red"
         elif all(f["missing"] for f in fs):
             state, col = "no data", "dim"
-        elif src == "agents":
-            state, col = f"{len(fs[0]['items'])} online", "green"
-            if any((it.get("status") or "").startswith("?") for it in fs[0]["items"]):
-                col = "peach"
-        elif any(f["bad"] for f in fs if f["view"] not in ("cloudformation", "dynamodb")):
-            state, col = "attention", "peach"
+        elif attention:
+            state, col = next((s["word"] for s in attention if s.get("word")), "attention"), "peach"
         else:
-            state, col = WORD.get(src, "online"), "green"
+            state, col = next((s["word"] for s in sums if s.get("word")), "online"), "green"
         name = (fs[0].get("title") or pane).lower()   # the pane's title in the config
         out.append((name, state, col, " · ".join(bits)))
     return out, order
@@ -302,68 +286,21 @@ def briefing(job, units, now):
     elif hour >= 22 or hour < 5:
         greetings = [f"Working late{to}?", f"Burning the midnight oil{to}?", f"Still here{to}? Here is the latest."]
     lines = [one(*greetings)]
-    by = {(f["source"], f["view"]): f for f in units if not f["missing"]}
-    issues = 0
-    agents = next((f for f in units if f["source"] == "agents" and not f["missing"]), None)
-    if agents:
-        waiting = [it for it in agents["items"] if (it.get("status") or "").startswith("?")]
-        if waiting:
-            n = len(waiting)
-            names = ", ".join(it.get("key") if it.get("key") not in (None, "·") else clean(it["title"]).split()[0] for it in waiting)
-            are = "is" if n == 1 else "are"
-            lines.append(one(f"{cap(count_words(n, 'agent'))} {are} waiting on you: {names}.",
-                             f"{names} {are} waiting for your input.",
-                             f"You have {count_words(n, 'agent')} waiting: {names}.",
-                             f"{names} would like a word."))
-            issues += 1
     # panes whose last fetch failed: say so, and claim nothing about them
     down = []
     for f in units:
-        name = {"aws": "Prod"}.get(f["source"], f["title"])
-        if f["error"] and not f["hidden"] and name not in down:
-            down.append(name)
+        if f["error"] and not f["hidden"] and f["title"] not in down:
+            down.append(f["title"])
     if down:
         who, are = " and ".join(down), "is" if len(down) == 1 else "are"
-        why = ": the AWS session has expired" if any("expired" in (f["error"] or "") for f in units if f["source"] == "aws") else ""
+        why = ": its session has expired" if any("expired" in (f["error"] or "") for f in units) and len(down) == 1 else ""
         lines.append(one(f"{who} {are} not reporting{why}.", f"I've lost contact with {who}{why}.", f"{who} {are} offline{why}."))
-        issues += 1
-    if ("aws", "alarms") in by and "Prod" not in down:
-        bad = len(by[("aws", "alarms")]["bad"])
-        if bad:
-            alarms, are = count_words(bad, "alarm"), "is" if bad == 1 else "are"
-            lines.append(one(f"{cap(count_words(bad, 'prod alarm'))} {are} firing.", f"Prod has {alarms} going off.",
-                             f"Heads up: {alarms} firing in prod."))
-            issues += 1
-        else:
-            lines.append(one("Prod is nominal.", "Prod is quiet.", "All quiet in prod.", "Prod is calm. No alarms."))
-    if ("aws", "sqs") in by and by[("aws", "sqs")]["bad"]:
-        lines.append(one("There are messages in the dead letter queues.", "Something is landing in the dead letter queues.",
-                         "The dead letter queues are not empty."))
-        issues += 1
-    if ("github", "review-requests") in by and by[("github", "review-requests")]["items"]:
-        n = len(by[("github", "review-requests")]["items"])
-        prs = count_words(n, "pull request")
-        lines.append(one(f"{cap(prs)} {'awaits' if n == 1 else 'await'} your review.",
-                         f"You have {count_words(n, 'review request')} waiting.",
-                         f"{cap(prs)} could use your eyes."))
-    sla = by.get(("jira", "sla"))
-    if sla and sla["next"] and sla["next"]["at"] - now < 86400:
-        d = dur(sla["next"]["at"] - now, True)
-        lines.append(one(f"The next SLA breach is in {d}.", f"Your nearest SLA deadline is {d} away.", f"An SLA comes due in {d}."))
-    cal = next((f for f in units if f["source"] == "calendar" and f["next"]), None)
-    if cal and cal["next"]["at"] - now < 4 * 3600:
-        title, d = clean(cal["next"]["title"]), dur(cal["next"]["at"] - now, True)
-        lines.append(one(f"{title} starts in {d}.", f"You have {title} in {d}.", f"{title} is coming up in {d}."))
-    # new articles, per category (view) of the rss pane
-    reads = [(f["view"] or "your feeds", f["unseen"]) for f in units if f["source"] == "rss" and not f["missing"] and not f["hidden"] and f["unseen"]]
-    if len(reads) == 1:
-        v, n = reads[0]
-        lines.append(one(f"{cap(count_words(n, 'new article'))} in {v}.", f"{cap(v)} has {count_words(n, 'new read')}.",
-                         f"{cap(count_words(n, 'new story', 'new stories'))} in {v}."))
-    elif reads:
-        parts = [f"{count_words(n, 'new article') if i == 0 else WORDS[n] if n < len(WORDS) else n} in {v}" for i, (v, n) in enumerate(reads)]
-        lines.append(one(f"There are {', '.join(parts[:-1])} and {parts[-1]}.", f"New reading: {', '.join(parts[:-1])} and {parts[-1]}."))
-    if not issues and len(lines) <= 2:
+    # then what each view has to say, the ones needing attention first
+    said = [f for f in units if f["sum"] and f["sum"].get("brief") and not f["hidden"] and f["title"] not in down]
+    said.sort(key=lambda f: f["sum"].get("state") != "attention")
+    for f in said:
+        lines.append(one(*f["sum"]["brief"]))
+    if not down and not any(f["sum"] and f["sum"].get("state") == "attention" for f in units) and len(lines) <= 2:
         lines.append(one("All systems nominal.", "Nothing needs your attention.", "Everything is running smoothly."))
     lines.append(one("Standing by.", "I'll keep an eye on things.", "At your service.", "Standing by, as always.",
                      "Let me know if you need anything."))
@@ -373,15 +310,8 @@ def briefing(job, units, now):
 def ticker(units, rows, now):
     bits = [f"{name} {state}" + (f": {summary}" if summary else "") for name, state, _, summary in rows]
     for f in units:
-        if f["source"] == "calendar":
-            for it in [it for it in f["items"] if (it.get("at") or 0) > now][:3]:
-                bits.append(f"{clean(it['title'])} in {dur(it['at'] - now)}")
-        elif f["source"] == "agents":
-            for it in f["items"]:
-                bits.append(f"{clean(it['title']).split()[0]} {it.get('status')}")
-        elif (f["source"], f["view"]) == ("github", "actions"):
-            for it in f["bad"][:3]:
-                bits.append(f"✗ {clean(it['title'])}")
+        if f["sum"] and not f["hidden"]:
+            bits += f["sum"].get("ticker") or []
     return "   ◆   ".join(bits) + "   ◆   "
 
 
@@ -604,6 +534,7 @@ class Hud:
         """(Re)read the cache: facts, systems, the briefing, the ticker."""
         self.now = self.read_at = time.time()
         self.units = facts(self.job)
+        summarize(self.job, self.units)
         self.rows, panes = systems(self.units, self.now)
         # each row's letter and the panel window that holds its pane
         windows = self.job.get("windows") or {}

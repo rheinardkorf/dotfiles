@@ -485,7 +485,28 @@ preview() {
   ' $f
 }
 
+# summary <view>: the HUD's line (and briefing sentences) for one view, from the
+# facts on stdin (see ~/.config/panel/lib/summary.jq); prints JSON
+summary() {
+  jq -c -L "${PANEL_CONFIG_DIR:-$HOME/.config/panel}/lib" 'include "summary";
+    def title: .title | clean;
+    if .view == "actions" then
+      if .bad > 0 then {line: "\(.bad) failing", state: "attention",
+        ticker: [.items[] | select(.status | test("✗|fail"; "i")) | "✗ \(title)"][:3]}
+      else {line: "builds green", word: "linked"} end
+    elif .view == "review-requests" then
+      if .count > 0 then (.count | count("pull request"; "pull requests")) as $prs
+        | {line: "\(.count) reviews waiting", word: "linked",
+           brief: ["\($prs | cap) \(if .count == 1 then "awaits" else "await" end) your review.",
+                   "You have \(.count | count("review request"; "review requests")) waiting.",
+                   "\($prs | cap) could use your eyes."]}
+      else {word: "linked"} end
+    elif .view == "my-prs" then {line: (if .count > 0 then "\(.count) open PRs" else null end), word: "linked"}
+    else {} end'
+}
+
 case $1 in
+  summary) summary "$2" ;;
   fetch)
     case $2 in
       actions)       fetch_actions ;;
