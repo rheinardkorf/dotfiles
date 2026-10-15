@@ -180,6 +180,12 @@ def facts(job):
     return units
 
 
+def seconds(s):
+    """30m / 24h / 7d -> seconds (a plain number is seconds)."""
+    m = re.fullmatch(r"(\d+)([smhd]?)", str(s).strip())
+    return int(m[1]) * {"": 1, "s": 1, "m": 60, "h": 3600, "d": 86400}[m[2]] if m else 86400
+
+
 def summarize(job, units):
     """Each unit describes itself: its source's `summary <view>` gets the unit's
     facts on stdin and prints {line, state, word, brief, ticker} (all optional).
@@ -196,6 +202,7 @@ def summarize(job, units):
             return None
         nxt = f["next"]
         facts_in = {"view": f["view"], "count": len(f["items"]), "unseen": f["unseen"], "bad": len(f["bad"]),
+                    "recent": seconds(f.get("recent") or "24h"),
                     "next": {"title": nxt.get("title"), "at": nxt["at"]} if nxt else None,
                     "error": f["error"], "now": now, "items": f["items"]}
         env = dict(os.environ, PANEL_CONFIG_DIR=config_dir,

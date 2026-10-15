@@ -153,7 +153,9 @@ internally:
 it had when you looked. Comparing that against the cache gives `●` (new),
 `◆` (changed since you looked) or nothing. An item is marked seen after the
 cursor rests on it for `seen_after`, but only while its pane is actually on
-screen. Window names show the count of unseen items, leaving out hidden views.
+screen. Window names show the count of unseen items, leaving out hidden views,
+and each view's tab in the header shows its own (`cloudformation ◆1`), so the
+window's count can be traced to a view.
 
 Sources control how noisy this is, through what they put in `updated`:
 calendar tracks a recurring series rather than each instance, SQS only changes
@@ -200,8 +202,11 @@ library only).
   (linked, nominal, ...), `brief` (phrasings of one spoken sentence, one picked
   at random) and `ticker` extras. Helpers for jq sources (number words,
   durations) are in `lib/summary.jq`. A pane's `summary` setting picks which
-  views are asked (default all; aws asks only alarms and sqs); a source without
-  `summary` gets a plain count. The HUD itself only adds the greeting, panes
+  views are asked (default all; aws asks alarms, sqs and cloudformation); a
+  source without `summary` gets a plain count. A pane's `recent` window
+  (default 24h) reaches every summary as `recent`, with the jq helper `fresh`,
+  so "attention" can mean new trouble only: a stack that failed within the
+  window, not one failed for months (that only shows in the grey line). The HUD itself only adds the greeting, panes
   that aren't reporting, and the sign-off.
 - **Per machine** (`assistant` in the config): mando is A.D.A. ("Always
   Diligent Assistant", voice `bf_isabella`), mantis is I.R.I.S. ("Intelligent

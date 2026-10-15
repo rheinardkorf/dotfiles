@@ -471,7 +471,8 @@ fetch_cloudformation() {
     | sort_by(.LastUpdatedTime // .CreationTime) | reverse
     | map({ id: "\(.Region)/\(.StackName)", key: "", title: .StackName,
             status: (.StackStatus | short),
-            updated: ((.LastUpdatedTime // .CreationTime) | epoch),
+            # its latest event: created, updated, or a delete attempt
+            updated: ([.DeletionTime, .LastUpdatedTime, .CreationTime] | map(select(. != null)) | max | epoch),
             url: "https://\(.Region).console.aws.amazon.com/cloudformation/home?region=\(.Region)#/stacks/stackinfo?stackId=\(.StackId | @uri)" })' <<<"$stacks"
 }
 
@@ -529,6 +530,15 @@ summary() {
         brief: ["There are messages in the dead letter queues.", "Something is landing in the dead letter queues.",
                 "The dead letter queues are not empty."]}
       else {line: "DLQs empty", word: "nominal"} end
+    elif .view == "cloudformation" then
+      . as $f | [.items[] | select(.status | test("✗"))] as $failed | [$failed[] | fresh($f)] as $new
+      | if ($new | length) > 0 then ($new | length) as $n | ($new | map(.title) | join(", ")) as $names
+          | {line: "\($failed | length) failed stacks", state: "attention",
+             brief: ["\($n | count("CloudFormation stack"; "CloudFormation stacks") | cap) failed in the last \($f.recent | spoken): \($names).",
+                     "Prod has \($n | count("stack"; "stacks")) that didn\u0027t deploy cleanly: \($names).",
+                     "Heads up: \($names) \(if $n == 1 then "is" else "are" end) in a failed state."]}
+        elif ($failed | length) > 0 then {line: "\($failed | length) failed stacks"}
+        else {line: "stacks healthy", word: "nominal"} end
     else {} end'
 }
 

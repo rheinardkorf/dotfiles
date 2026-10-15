@@ -34,6 +34,8 @@
 #            or {name: {type: "hud", title}}          the assistant HUD as a window
 #            summary: true / false / [view, ...]: which views describe themselves on the
 #                     HUD (its source's `summary`; default: all)
+#            recent: "24h"  how far back "recent" reaches for its summaries (e.g. only
+#                           stacks that failed within it need attention; default 24h)
 #            key: "a"   its key on the HUD (jumps to its window; case matters,
 #                       digits work; default: a letter of its title)
 #            hidden_views: [view, ...]: not in the tab rotation, header or counts
@@ -69,7 +71,7 @@
 #   <source> search <words>  optional: "<id>\t<snippet>" for each cached item whose
 #                            content has all the words (used by alt-f)
 #   <source> summary <view>  optional: the HUD's line for a view, from its facts on
-#                            stdin ({view, count, unseen, bad, next, error, now, items}):
+#                            stdin ({view, count, unseen, bad, next, error, now, recent, items}):
 #                            prints {line, state: "attention", word, brief: [phrasings
 #                            of one sentence], ticker: [...]} (~/.config/panel/lib/summary.jq)
 #   <source> event           optional: an event on stdin (panel event); exit 0 when
@@ -386,13 +388,29 @@ update_window_name() {
 lines() {   # lines <pane> <pid>
   local pane="$(cur_unit $1 $2)" tabs="" v cur
   local dir="$PANEL_CACHE/panes/$pane"
-  # views: all of them in the header, the one shown in bold
+  # views: all of them in the header, the one shown in bold, each with its
+  # unseen count (●new ◆changed) so the window's ●N can be found
   if [[ $pane == */* ]]; then
     cur=${pane#*/}
-    local -a hidden=( ${(f)"$(hidden_views $1)"} )
-    for v in ${(f)"$(visible_views $1 $2)"}; do
-      local label=$v; (( ${hidden[(Ie)$v]} )) && label=$'\U000F0209'" $v"   # nf-md-eye_off
-      [[ $v == $cur ]] && tabs+=$'\e[0;1m'"$label"$'\e[0;2m  ' || tabs+="$label  "
+    local -a hidden=( ${(f)"$(hidden_views $1)"} ) views=( ${(f)"$(visible_views $1 $2)"} ) files
+    local -A counts
+    files=( $PANEL_CACHE/panes/$1/${^views}/items.json(N) )
+    if (( $#files )); then
+      local line
+      [[ -s $SEEN ]] || print '{}' > $SEEN
+      for line in ${(f)"$(jq -rn --arg src "$(pane_source $1)" --slurpfile s $SEEN "$JQ_STATE"'
+          $s[0] as $seen | inputs | [input_filename, ([.[] | state($seen; $src)] | [(map(select(. == "new")) | length), (map(select(. == "changed")) | length)] | join(" "))]
+          | join(" ")' $files 2>/dev/null)"}; do
+        counts[${${line%% *}:h:t}]=${line#* }
+      done
+    fi
+    for v in $views; do
+      local label=$v n=${counts[$v]%% *} c=${counts[$v]##* } marks=""
+      (( ${hidden[(Ie)$v]} )) && label=$'\U000F0209'" $v"   # nf-md-eye_off
+      (( n > 0 )) && marks+=" "$'\e[0;38;2;250;179;135m'"●$n"
+      (( c > 0 )) && marks+=" "$'\e[0;38;2;249;226;175m'"◆$c"
+      if [[ $v == $cur ]]; then tabs+=$'\e[0;1m'"$label$marks"$'\e[0;2m  '
+      else tabs+="$label$marks"$'\e[0;2m  '; fi
     done
     tabs+="(tab)  ·  "
   fi
@@ -642,10 +660,11 @@ hud() {
         | . as $p | $c.panes[$p] as $P | select($P.source)
         # does the HUD ask this unit for a summary? pane "summary": true (default), false, or [views]
         | def wants($v): ($P.summary // true) as $s | if ($s | type) == "array" then ($v | IN($s[])) else $s end;
-        if $P.views == null then {unit: $p, pane: $p, view: null, source: $P.source, title: ($P.title // $p), key: $P.key,
+        if $P.views == null then {unit: $p, pane: $p, view: null, source: $P.source, title: ($P.title // $p), key: $P.key, recent: $P.recent,
                                     hidden: false, summary: ($P.summary // true | if type == "array" then true else . end)}
           else ($P.views | if type == "object" then keys_unsorted else . end)[] as $v
             | {unit: "\($p)/\($v)", pane: $p, view: $v, source: $P.source, title: ($P.title // $p), key: $P.key, summary: wants($v),
+               recent: $P.recent,
                hidden: ($v | IN(($P.hidden_views // [])[]))} end ] }' > $job || die "can't read the config"
   [[ $mode == window ]] || exec python3 -I "$PANEL_CONFIG_DIR/hud/hud.py" $job
   python3 -I "$PANEL_CONFIG_DIR/hud/hud.py" $job

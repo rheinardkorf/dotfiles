@@ -89,8 +89,10 @@
       "title": "Prod",
       "source": "aws",
       "key": "a",
-      // the HUD hears from alarms and SQS; stacks and tables have nothing to say
-      "summary": ["alarms", "sqs"],
+      // the HUD hears from alarms, SQS and stacks (only stacks that failed in the
+      // last day need attention); tables have nothing to say
+      "summary": ["alarms", "sqs", "cloudformation"],
+      "recent": "24h",
       "views": ["alarms", "cloudformation", "dynamodb", "sqs"],
       "every": {"*": "5m", "cloudformation": "15m", "dynamodb": "1h"}
     }
