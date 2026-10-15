@@ -26,6 +26,11 @@ Images: each new article's picture is saved in the cache (as JPEG, at most
 first image in its text, else the article page's og:image (the one time a page
 is read: its head, once per article). The preview starts with
 "<!-- panel:image <path> -->" for panel to draw it.
+
+Sparse articles (a link and little else, like Hacker News and Lobsters items):
+their page is read once at fetch time for its description (og:description) and
+the opening of the article itself (readable text, extracted with trafilatura
+through uv), so the preview says what it's about.
 """
 import subprocess
 import concurrent.futures
@@ -48,9 +53,25 @@ CACHE = os.environ.get("PANEL_SOURCE_CACHE") or sys.exit("rss: run me through pa
 FEEDS = os.path.join(CACHE, "feeds")
 KEEP, KEEP_DAYS = 50, 30
 IMAGES = os.path.join(CACHE, "images")
-SAVED = os.path.join(CACHE, "saved.json")   # articles saved for later: {id: article + feed}
+SAVED = os.path.join(CACHE, "saved.json")
+PAGES = os.path.join(CACHE, "pages")        # article pages, only while being read   # articles saved for later: {id: article + feed}
 IMAGE_JOBS = 60          # at most this many image lookups per fetch (the rest wait)
 IMAGE_MAX = 8_000_000    # bytes
+SPARSE = 200             # feed text shorter than this (characters) gets its page read
+PAGE_JOBS = 40           # at most this many pages read per fetch (the rest wait)
+PAGE_MAX = 2_000_000     # bytes
+OPENING = 1500           # characters of the article kept for the preview
+EXTRACT = """
+import json, sys, trafilatura
+out = {}
+for aid, (path, url) in json.load(open(sys.argv[1])).items():
+    try:
+        out[aid] = trafilatura.extract(open(path, encoding="utf-8", errors="replace").read(), url=url,
+                                       include_comments=False, include_tables=False, favor_precision=True) or ""
+    except Exception:
+        out[aid] = ""
+json.dump(out, sys.stdout)
+"""
 UA = "panel-rss/1.0 (+https://github.com/rheinardkorf/dotfiles)"
 
 NS = {"atom": "http://www.w3.org/2005/Atom", "content": "http://purl.org/rss/1.0/modules/content/",
@@ -182,7 +203,7 @@ def update(feed):
         aid = sha(url + "\n" + e["id"])
         old = arts.get(aid, {})
         e["first_seen"] = old.get("first_seen", now)
-        for k in ("image", "image_tried"):   # found (or looked for) once, kept
+        for k in ("image", "image_tried", "page_tried", "description", "opening"):   # found (or looked for) once, kept
             if k in old:
                 e[k] = old[k]
         e["summary"] = e["summary"][:20000]
@@ -238,6 +259,76 @@ def find_image(job):
         return None
 
 
+DESC = re.compile(r"""<meta[^>]+(?:property|name)=["'](?:og:description|twitter:description|description)["'][^>]*>""", re.I)
+
+
+def opening(text):
+    """The article's first paragraphs, up to OPENING characters, cut at a paragraph."""
+    out, n = [], 0
+    for para in [p.strip() for p in (text or "").split("\n") if p.strip()]:
+        if n and n + len(para) > OPENING:
+            break
+        out.append(para[:OPENING])
+        n += len(para)
+    return "\n\n".join(out)
+
+
+def read_page(job):
+    """(article id, link) -> (id, description, html file or None, final url)."""
+    aid, link = job
+    try:
+        page, final = get(link, PAGE_MAX)
+        doc = page.decode("utf-8", "replace")
+        m = DESC.search(doc[:300_000])
+        c = CONTENT.search(m[0]) if m else None
+        path = os.path.join(PAGES, aid + ".html")
+        with open(path, "w") as fh:
+            fh.write(doc)
+        return aid, html.unescape(c[1]).strip() if c else "", path, final
+    except Exception:
+        return aid, "", None, link
+
+
+def enrich(paths):
+    """Sparse articles: read their page once for its description and opening."""
+    jobs, where = [], {}
+    for path in paths:
+        for aid, a in load(path, {}).get("articles", {}).items():
+            if not a.get("page_tried") and a.get("link") and len(plain(a.get("summary"))) < SPARSE:
+                jobs.append((aid, a["link"]))
+                where[aid] = path
+    jobs = jobs[:PAGE_JOBS]
+    if not jobs:
+        return
+    os.makedirs(PAGES, exist_ok=True)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
+        pages = list(pool.map(read_page, jobs))
+    # the readable text of every page at once (one uv start)
+    texts = {}
+    todo = {aid: (path, url) for aid, _, path, url in pages if path}
+    if todo:
+        spec = os.path.join(PAGES, "jobs.json")
+        with open(spec, "w") as fh:
+            json.dump(todo, fh)
+        try:
+            r = subprocess.run(["uv", "run", "-q", "--no-project", "--python", "3.12", "--with", "trafilatura",
+                                "python", "-I", "-c", EXTRACT, spec], capture_output=True, text=True, timeout=180)
+            texts = json.loads(r.stdout) if r.returncode == 0 else {}
+        except Exception:
+            texts = {}
+    for name in os.listdir(PAGES):   # the pages themselves aren't kept
+        os.unlink(os.path.join(PAGES, name))
+    by_path = {}
+    for aid, desc, _, _ in pages:
+        by_path.setdefault(where[aid], []).append((aid, desc))
+    for path, res in by_path.items():
+        st = load(path, {})
+        for aid, desc in res:
+            if aid in st.get("articles", {}):
+                st["articles"][aid].update(page_tried=True, description=desc, opening=opening(texts.get(aid)))
+        save(path, st)
+
+
 def images(paths):
     """Look up pictures for articles that haven't been tried, then drop unused ones."""
     os.makedirs(IMAGES, exist_ok=True)
@@ -284,6 +375,7 @@ def fetch(query):
     with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
         results = list(pool.map(update, feeds))
     errors = [err for _, err in results if err]
+    enrich([feed_file(f["url"]) for f in feeds])
     images([feed_file(f["url"]) for f in feeds])
     results = [(load(feed_file(f["url"]), st), err) for f, (st, err) in zip(feeds, results)]
     items = []
@@ -379,6 +471,16 @@ def preview(aid):
             if a.get("link"):
                 print(f"{a['link']}\n")
             body = plain(a.get("summary"))
+            if len(body) < SPARSE and (a.get("description") or a.get("opening")):
+                # a sparse feed entry: what the page says about itself, then its opening
+                if a.get("description"):
+                    print(f"_{a['description']}_\n")
+                if a.get("opening"):
+                    print("## From the article\n")
+                    print(a["opening"] + "\n")
+                if body:
+                    print(f"---\n\n{body}")
+                return
             print(body[:6000] + ("…" if len(body) > 6000 else "") if body else "_No summary in the feed: ctrl-o opens the article._")
             return
     print("This article is no longer in the cache.")
@@ -387,7 +489,7 @@ def preview(aid):
 def search(words):
     words = [w for w in words.lower().split() if w]
     for aid, a, _ in articles():
-        txt = re.sub(r"\s+", " ", f"{a['title']}  {plain(a.get('summary'))}")
+        txt = re.sub(r"\s+", " ", f"{a['title']}  {plain(a.get('summary'))}  {a.get('description') or ''}  {a.get('opening') or ''}")
         low = txt.lower()
         if words and all(w in low for w in words):
             i = low.index(words[0])
@@ -412,8 +514,8 @@ def summary(view):
             f"You have {count(n, 'article', 'articles')} waiting to be read.",
             f"Your reading list has {count(n, 'article', 'articles')}."]}))
     where, n = view or "your feeds", f.get("unseen", 0)
-    if not n:
-        return print(json.dumps({"line": f"{f.get('count', 0)} in {where}", "word": "synced"}))
+    if not n:   # all read: nothing to say (the total isn't news)
+        return print(json.dumps({"word": "synced"}))
     print(json.dumps({"line": f"{n} new in {where}", "word": "synced", "brief": [
         f"{count(n, 'new article', 'new articles').capitalize()} in {where}.",
         f"{where.capitalize()} has {count(n, 'new read', 'new reads')}.",

@@ -98,7 +98,11 @@ internally:
   in parallel, the last 50 articles per feed; every article is new (●) until
   you've looked at it. Each article's picture is cached at fetch time (media tags or
   enclosure, else the first image in its text, else the page's og:image),
-  as a small JPEG, and drawn above the preview with kitty's graphics protocol.
+  as a small JPEG, and drawn above the preview with kitty's graphics protocol. Sparse
+  articles (feed text under 200 characters: Hacker News, Lobsters, teasers)
+  get their page read once at fetch time: its description and the opening of
+  the article (readable text via trafilatura, run through uv; 40 pages per
+  fetch, the pages themselves not kept), shown instead of the bare links.
 - **agents** (local files): every running Claude Code session from
   `~/.claude/sessions/<pid>.json` (name, folder, busy / idle, tmux pane), with
   the title, last prompt and reply from its transcript, and this turn's

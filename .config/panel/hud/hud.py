@@ -12,7 +12,8 @@ system's letter (shown beside it) jumps to its window in the panel session.
 
 As a window in the panel session (job "mode": "window") it stays open and
 silent: space speaks the briefing, the cache is read again every 15 seconds,
-and nothing is drawn while the window is off screen.
+and nothing is drawn while the window is off screen. It starts again (without
+the boot) when the config or this code changes, so it never runs stale.
 Run by panel, with a job file: {"assistant": {...}, "user": "...", "cache": "...",
 "units": [{unit, pane, view, title, source, hidden}, ...]}
 """
@@ -149,6 +150,13 @@ class Braille:
 # --- facts from the panel cache ----------------------------------------------------
 ANSI = re.compile(r"\x1b\[[0-9;]*m")
 BAD = re.compile(r"✗|fail|alarm|breach|^\?|dlq: [1-9]", re.I)
+
+
+def mtime(path):
+    try:
+        return os.stat(path).st_mtime
+    except OSError:
+        return None
 
 
 def load(path, default):
@@ -529,6 +537,10 @@ class Hud:
         self.read()
         self.t0 = time.time()
         self.boot_end = 2.2 + 0.32 * len(self.rows) + 1.1
+        if os.environ.get("PANEL_HUD_NOBOOT"):   # a restart of the window: straight to the HUD
+            self.t0 -= self.boot_end + 1
+        # what the window was built from: when one changes, it starts again
+        self.watched = {f: mtime(f) for f in (job.get("config_files") or []) + [os.path.abspath(__file__)]}
         self.vitals = Vitals()
         self.vitals.start()
         if self.window:   # silent until asked
@@ -569,6 +581,10 @@ class Hud:
         # and show the panel session, when the HUD is a popup over another one
         subprocess.run(["tmux", "switch-client", "-t", "=panel"], capture_output=True)
         return True
+
+    def stale(self):
+        """The config or the HUD's code changed since it started."""
+        return any(mtime(f) != m for f, m in self.watched.items())
 
     def refresh(self):
         """In a window: read the cache again every 15 seconds, but not mid-sentence."""
@@ -721,7 +737,7 @@ def main():
     try:
         tty.setcbreak(fd)
         out.write("\x1b[?1049h\x1b[?25l\x1b[2J")
-        pane, shown, checked = os.environ.get("TMUX_PANE"), True, 0.0
+        pane, shown, checked, stale_at = os.environ.get("TMUX_PANE"), True, 0.0, time.time()
         while True:
             if hud.window and pane and time.time() - checked > 1:
                 # only draw while the window is on screen: the active window of an attached session
@@ -736,6 +752,10 @@ def main():
                 if r and not os.read(fd, 32):
                     break   # the terminal is gone (end of input): stop, don't spin
                 continue
+            if hud.window and hud.voice.done and time.time() - stale_at > 5:
+                stale_at = time.time()
+                if hud.stale():
+                    break   # the window loop starts it again, with the new config or code
             hud.refresh()
             try:   # the terminal itself (shutil would trust COLUMNS / LINES from the environment)
                 size = os.get_terminal_size(fd)
