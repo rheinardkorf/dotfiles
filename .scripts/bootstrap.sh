@@ -181,6 +181,38 @@ else
   fi
 fi
 
+# --- Assistant voice: Kokoro, an offline voice model for panel's HUD -------------
+# Model files from the kokoro-onnx release (checked by size), and the uv
+# environment the HUD runs it in, made once so the first briefing isn't slow.
+echo "Assistant voice (Kokoro)"
+KOKORO_DIR="${KOKORO_DIR:-$HOME/.local/share/kokoro}"
+KOKORO_URL="https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0"
+for f in "kokoro-v1.0.onnx 325532387" "voices-v1.0.bin 28214398"; do
+  name="${f% *}" size="${f#* }"
+  if [[ "$(stat -f %z "$KOKORO_DIR/$name" 2>/dev/null)" == "$size" ]]; then okay "$name"
+  else
+    todo "$name ($((size / 1000000)) MB)"
+    if ! $DRY_RUN; then
+      mkdir -p "$KOKORO_DIR"
+      if curl -fsSL -o "$KOKORO_DIR/$name.part" "$KOKORO_URL/$name" &&
+         [[ "$(stat -f %z "$KOKORO_DIR/$name.part")" == "$size" ]]; then
+        mv "$KOKORO_DIR/$name.part" "$KOKORO_DIR/$name"
+      else
+        rm -f "$KOKORO_DIR/$name.part"; fail "$name download failed (or the wrong size)"
+      fi
+    fi
+  fi
+done
+KOKORO_ENV=(uv run -q --no-project --python 3.12 --with kokoro-onnx --with soundfile python -I -c "import kokoro_onnx, soundfile")
+if ! command -v uv >/dev/null; then
+  $DRY_RUN && todo "kokoro environment (uv is installed in the Packages step)" || fail "uv needed for the kokoro environment"
+elif UV_OFFLINE=1 "${KOKORO_ENV[@]}" >/dev/null 2>&1; then   # already there: works without downloading
+  okay "kokoro environment"
+else
+  todo "kokoro environment (Python 3.12 + kokoro-onnx, through uv)"
+  run "${KOKORO_ENV[@]}" >/dev/null 2>&1 || fail "could not set up the kokoro environment"
+fi
+
 # --- Machine name (used by SketchyBar / Hammerspoon) ---------------------------
 echo "Machine"
 if [[ -s "$HOME/.config/machine-name" ]]; then okay "machine-name: $(head -n1 "$HOME/.config/machine-name")"
