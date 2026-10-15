@@ -66,6 +66,7 @@
     "agents": {
       "title": "Agents",
       "source": "agents",
+      "key": "A",
       "query": "active",
       "every": "15s"
     },
@@ -87,6 +88,7 @@
     "aws": {
       "title": "Prod",
       "source": "aws",
+      "key": "a",
       "views": ["alarms", "cloudformation", "dynamodb", "sqs"],
       "every": {"*": "5m", "cloudformation": "15m", "dynamodb": "1h"}
     }

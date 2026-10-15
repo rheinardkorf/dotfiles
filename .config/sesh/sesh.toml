@@ -7,6 +7,9 @@ sort_order = [
   ["config", "zoxide"],
 ]
 
+# Sessions never listed (still in tmux's own prefix s)
+blacklist = ["panel-fetcher"]   # panel's background fetcher
+
 [tui]
 show_icons = true
 show_windows = true

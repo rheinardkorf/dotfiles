@@ -32,6 +32,8 @@
 #            list: "title" shows rows as the title, then its age (no key, status
 #                  or spark columns), e.g. for reading
 #            or {name: {type: "hud", title}}          the assistant HUD as a window
+#            key: "a"   its key on the HUD (jumps to its window; case matters,
+#                       digits work; default: a letter of its title)
 #            hidden_views: [view, ...]: not in the tab rotation, header or counts
 #                                       until alt-h reveals them (still fetched)
 #   layouts  {name: {window: [pane, ...]}}            one tmux window per context
@@ -88,6 +90,7 @@ path=(/opt/homebrew/bin /Applications/kitty.app/Contents/MacOS $path)   # kitten
 PANEL_CONFIG_DIR="${PANEL_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/panel}"
 PANEL_CACHE="${PANEL_CACHE:-${XDG_CACHE_HOME:-$HOME/.cache}/panel}"
 SESSION=panel
+FETCHER_SESSION=panel-fetcher   # the fetcher's own session: out of the way of panel's windows
 self="${0:A}"
 
 die() { print -u2 "panel: $*"; exit 1 }
@@ -627,11 +630,12 @@ hud() {
   # every unit of the layout, in order, with what the HUD needs to know about it
   conf --arg l "$(default_layout)" --arg user "$user" --arg cache "$PANEL_CACHE" --arg mode $mode '
     . as $c | {assistant: (.assistant // {}), user: $user, cache: $cache, mode: $mode,
+      windows: ($c.layouts[$l] // {}),
       units: [ reduce ($c.layouts[$l][][]) as $p ([]; if any(.[]; . == $p) then . else . + [$p] end) | .[]
         | . as $p | $c.panes[$p] as $P | select($P.source)
-        | if $P.views == null then {unit: $p, pane: $p, view: null, source: $P.source, title: ($P.title // $p), hidden: false}
+        | if $P.views == null then {unit: $p, pane: $p, view: null, source: $P.source, title: ($P.title // $p), key: $P.key, hidden: false}
           else ($P.views | if type == "object" then keys_unsorted else . end)[] as $v
-            | {unit: "\($p)/\($v)", pane: $p, view: $v, source: $P.source, title: ($P.title // $p),
+            | {unit: "\($p)/\($v)", pane: $p, view: $v, source: $P.source, title: ($P.title // $p), key: $P.key,
                hidden: ($v | IN(($P.hidden_views // [])[]))} end ] }' > $job || die "can't read the config"
   [[ $mode == window ]] || exec python3 -I "$PANEL_CONFIG_DIR/hud/hud.py" $job
   python3 -I "$PANEL_CONFIG_DIR/hud/hud.py" $job
@@ -657,8 +661,9 @@ pane_cmd() {
 
 # up [layout]: build the session from the layout; if it's already there, repair
 # it: add the windows the layout has and the session lacks (in the layout's
-# order) and the fetch window. Windows are known by @panel_name; nothing is
-# removed, reordered or changed.
+# order). Windows are known by @panel_name; nothing is removed, reordered or
+# changed. The fetcher runs in its own session (panel-fetcher), started if it
+# isn't running; an old fetch window in the panel session is moved out.
 up() {
   local layout=${1:-$(default_layout)} win w prev="" p id name
   local -a panes added
@@ -685,10 +690,13 @@ up() {
     (( $#panes > 1 )) && tmux select-layout -t $w even-horizontal >/dev/null
     prev=$w
   done
-  if [[ -z $have[fetch] ]]; then
-    w="$(tmux new-window -d -t "=$SESSION:" -n fetch -c ~ -P -F '#{window_id}' "$self fetcher $layout")"
-    tmux set-option -w -t $w @panel_name fetch
-    (( $#have )) && added+=( fetch )
+  if ! tmux has-session -t "=$FETCHER_SESSION" 2>/dev/null; then
+    tmux new-session -d -s $FETCHER_SESSION -n fetch -c ~ "$self fetcher $layout"
+    (( $#have )) && added+=( "the $FETCHER_SESSION session" )
+  fi
+  if [[ -n $have[fetch] ]]; then   # the fetcher used to be a window of panel itself
+    tmux kill-window -t $have[fetch]
+    print "panel: the fetcher now runs in the $FETCHER_SESSION session (its window in $SESSION is gone)"
   fi
   (( $#added )) && print "panel: added ${(j:, :)added}"
   [[ -n $PANEL_DETACHED ]] && return 0

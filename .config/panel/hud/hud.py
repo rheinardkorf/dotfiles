@@ -7,7 +7,8 @@ time, the Mac's vitals, a radar of agents and a ticker, while the assistant
 speaks a briefing. Everything it says comes from the panel cache; only CPU,
 memory and battery come from the Mac itself.
 
-Keys: esc / q close, space skips the boot or repeats the briefing.
+Keys: esc / q close, space skips the boot or repeats the briefing, and each
+system's letter (shown beside it) jumps to its window in the panel session.
 
 As a window in the panel session (job "mode": "window") it stays open and
 silent: space speaks the briefing, the cache is read again every 15 seconds,
@@ -234,7 +235,7 @@ WORD = {"jira": "linked", "github": "linked", "aws": "nominal", "calendar": "syn
 
 
 def systems(units, now):
-    """One row per pane: (name, state word, colour, summary)."""
+    """One row per pane: (name, state word, colour, summary); and the panes, in order."""
     rows, order = {}, []
     for f in units:
         if f["hidden"]:
@@ -260,9 +261,26 @@ def systems(units, now):
             state, col = "attention", "peach"
         else:
             state, col = WORD.get(src, "online"), "green"
-        name = {"aws": "prod"}.get(src, pane)
+        name = (fs[0].get("title") or pane).lower()   # the pane's title in the config
         out.append((name, state, col, " · ".join(bits)))
-    return out
+    return out, order
+
+
+RESERVED = set("q ")   # q closes the popup, space briefs
+
+
+def letters(names, chosen):
+    """A key per name: the one chosen in the config ("key"; case matters, digits
+    work), else the name's first free letter, else another from it, else any."""
+    used = set(RESERVED) | {k for k in chosen if k}
+    keys = []
+    for name, k in zip(names, chosen):
+        if not k:
+            k = next((c for c in name.lower() if c.isalpha() and c not in used), None)
+            k = k or next((c for c in "abcdefghijklmnoprstuvwxyz" if c not in used), "")
+            used.add(k)
+        keys.append(k)
+    return keys
 
 
 def cap(s):
@@ -586,10 +604,33 @@ class Hud:
         """(Re)read the cache: facts, systems, the briefing, the ticker."""
         self.now = self.read_at = time.time()
         self.units = facts(self.job)
-        self.rows = systems(self.units, self.now)
+        self.rows, panes = systems(self.units, self.now)
+        # each row's letter and the panel window that holds its pane
+        windows = self.job.get("windows") or {}
+        chosen = [next((str(f.get("key") or "")[:1] for f in self.units if f["pane"] == pane), "") for pane in panes]
+        chosen = ["" if k in RESERVED else k for k in chosen]
+        self.keys = letters([r[0] for r in self.rows], chosen)
+        self.jumps = {k: next((w for w, ps in windows.items() if pane in ps), None)
+                      for k, pane in zip(self.keys, panes) if k}
         self.sentences = briefing(self.job, self.units, self.now)
         self.tick = ticker(self.units, self.rows, self.now)
         self.agents = next((f["items"] for f in self.units if f["source"] == "agents"), [])
+
+    def jump(self, key):
+        """Go to the window of the system with this letter (in the panel session);
+        True when it went (the popup then closes)."""
+        win = self.jumps.get(key)
+        if not win:
+            return False
+        out = subprocess.run(["tmux", "list-windows", "-t", "=panel:", "-F", "#{window_id} #{@panel_name}"],
+                             capture_output=True, text=True).stdout.split("\n")
+        wid = next((line.split()[0] for line in out if line.split()[1:] == [win]), None)
+        if not wid:
+            return False
+        subprocess.run(["tmux", "select-window", "-t", wid], capture_output=True)
+        # and show the panel session, when the HUD is a popup over another one
+        subprocess.run(["tmux", "switch-client", "-t", "=panel"], capture_output=True)
+        return True
 
     def refresh(self):
         """In a window: read the cache again every 15 seconds, but not mid-sentence."""
@@ -663,7 +704,7 @@ class Hud:
         # header
         scr.put(2, 0, f"{self.name}  ", C["sky"])
         scr.put(2 + len(self.name) + 2, 0, self.meaning, C["dim"])
-        hint = "space: brief me" if self.window else "space: brief again · esc: dismiss"
+        hint = "letter: go there · space: brief me" if self.window else "letter: go there · space: brief again · esc: dismiss"
         scr.put(w - len(hint) - 2, 0, hint, C["faint"])
         scr.put(0, 1, "─" * w, C["faint"])
         busy = sum(1 for it in self.agents if it.get("status") in ("busy", "running"))
@@ -687,10 +728,12 @@ class Hud:
                 yy = body_top + 8 + i * 2
                 if yy + 1 >= body_top + body_h:
                     break
-                scr.put(lx, yy, "●", C[col])
-                scr.put(lx + 2, yy, name.ljust(10), C["text"])
-                scr.put(lx + 12, yy, state, C[col])
-                scr.put(lx + 2, yy + 1, summary[: max(0, rx - lx - 4)], C["dim"])
+                key = self.keys[i] if self.jumps.get(self.keys[i]) else ""
+                scr.put(lx, yy, f"{key or ' '}", C["sky"])   # press it to jump there
+                scr.put(lx + 2, yy, "●", C[col])
+                scr.put(lx + 4, yy, name.ljust(10), C["text"])
+                scr.put(lx + 14, yy, state, C[col])
+                scr.put(lx + 4, yy + 1, summary[: max(0, rx - lx - 6)], C["dim"])
             # right: vitals and the agent radar
             vx = rx + rw + 4
             vw = max(10, min(20, w - vx - 14))
@@ -771,6 +814,8 @@ def main():
                     break
                 if key[:1] == b" ":
                     hud.skip()
+                elif len(key) == 1 and hud.jump(key.decode("utf-8", "replace")) and not hud.window:
+                    break   # the popup has done its job
     except KeyboardInterrupt:
         pass
     finally:

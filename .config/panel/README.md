@@ -112,7 +112,8 @@ internally:
 ## 3. The engine: `~/.scripts/panel`
 
 - **`panel up`** builds the tmux session from a layout: one window per
-  context, one pane per entry, plus a `fetch` window. Run again, it repairs the
+  context, one pane per entry. The fetcher runs in its own session,
+  `panel-fetcher` (`tmux attach -t panel-fetcher` to watch it). Run again, it repairs the
   session: windows the layout has but the session lacks (known by their
   `@panel_name`) come back in the layout's order; nothing else is touched.
   `panel up -d` does the same without switching to it. **hyper+p**
@@ -178,7 +179,10 @@ kitty maps cmd-f and cmd+shift+h to the alt keys: kitty has its own cmd-f
 
 A full-screen assistant over everything, purely for show: cmd+shift+a (kitty)
 sends prefix A, which opens it in a borderless tmux popup; esc closes it, space
-skips the boot or repeats the briefing. Code in `hud/` (Python, standard
+skips the boot or repeats the briefing, and each system's key (shown beside
+it) jumps to its window in the panel session, from anywhere (the popup then
+closes). A pane's `key` in the config picks it (case matters, digits work: aws
+is `a`, agents `A` on mantis); without one, a letter of its title. Code in `hud/` (Python, standard
 library only).
 
 - **Boot**: the assistant's name resolves out of noise, then a systems check
