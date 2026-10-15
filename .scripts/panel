@@ -543,6 +543,7 @@ hud_window() {
   trap 'exit 0' HUP TERM
   while :; do
     hud window
+    [[ -t 0 ]] || exit 0   # no terminal any more (its pane or server is gone)
     sleep 0.5
     changed && exec $self hud window
   done

@@ -722,6 +722,7 @@ def main():
     if not job:
         sys.exit("panel hud: no job")
     hud = Hud(job)
+    signal.signal(signal.SIGHUP, lambda *_: sys.exit(0))   # its terminal closed
     fd = sys.stdin.fileno()
     old = termios.tcgetattr(fd)
     out = sys.stdout
@@ -740,8 +741,8 @@ def main():
                     out.write("\x1b[2J")
             if not shown:
                 r, _, _ = select.select([fd], [], [], 1)
-                if r:
-                    os.read(fd, 32)
+                if r and not os.read(fd, 32):
+                    break   # the terminal is gone (end of input): stop, don't spin
                 continue
             hud.refresh()
             try:   # the terminal itself (shutil would trust COLUMNS / LINES from the environment)
@@ -753,6 +754,8 @@ def main():
             r, _, _ = select.select([fd], [], [], 1 / 14)
             if r:
                 key = os.read(fd, 32)
+                if not key:
+                    break   # the terminal is gone (end of input): stop, don't spin
                 if key[:1] in (b"\x1b", b"q", b"\x03") and not hud.window:
                     break
                 if key[:1] == b" ":
@@ -761,9 +764,12 @@ def main():
         pass
     finally:
         hud.voice.stop()
-        termios.tcsetattr(fd, termios.TCSADRAIN, old)
-        out.write("\x1b[0m\x1b[?25h\x1b[?1049l")
-        out.flush()
+        try:   # the terminal may already be gone
+            termios.tcsetattr(fd, termios.TCSADRAIN, old)
+            out.write("\x1b[0m\x1b[?25h\x1b[?1049l")
+            out.flush()
+        except (OSError, ValueError):
+            pass
 
 
 if __name__ == "__main__":
