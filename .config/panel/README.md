@@ -92,6 +92,13 @@ internally:
   changes), SQS queues (dead-letter queues with messages first).
 - **calendar** (gog, always `--readonly`): today and the next days, with a
   countdown and RSVP state.
+- **feature-flags** (aws CLI, read-only): flags kept the way
+  `@x-team-systems/sls-dynamodb-feature-flags` stores them (`pk = FEAT#<name>`,
+  `sk = A`; on when `pk1 = FEAT#ENABLED`). One view per table (`table` or
+  `region:table`); a filtered scan per fetch, since disabled flags are only in
+  the base table. The pane, its tables and its window live in
+  `config.local.json`. A toggled flag's `updatedAt` marks it changed (◆); the
+  HUD gets "10 flags · 4 on" and a sentence for flags changed recently.
 - **rss** (Python, standard library): RSS and Atom feeds; each view is a
   category whose query is its list of feeds (`config.local.json`, since a
   feed list is personal). Conditional requests (ETag / Last-Modified), feeds

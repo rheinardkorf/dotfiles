@@ -1,0 +1,137 @@
+#!/usr/bin/env zsh
+# panel source: feature flags kept in DynamoDB the way @x-team-systems/
+# sls-dynamodb-feature-flags stores them, through the aws CLI. Read-only.
+#
+#   feature-flags fetch <table>          every flag in the table, alphabetical
+#   feature-flags fetch <region>:<table>   (a table in another region)
+#   feature-flags preview <id>           a flag as Markdown, from the cache
+#   feature-flags search <words>         "<id>\t<snippet>" for flags matching all the words
+#   feature-flags summary <view>         the HUD's line (and a sentence when a flag
+#                                        changed within the pane's recent window)
+#
+# Each flag is one item: pk = FEAT#<name>, sk = A, name, description, type,
+# updatedAt; it's on when pk1 = FEAT#ENABLED (the partition the library's GSI
+# lists). Disabled flags have no pk1, or another value (some tables write
+# FEAT#DISABLED), so listing every flag means a filtered scan of the table: one
+# read of the whole table per fetch (small tables: ~120 read units for 6,000
+# items), hence a long fetch cycle and ctrl-r for now.
+#
+# Config (.sources.feature-flags, in config.local.json: table names stay out of
+# the repo):
+#   profile      AWS profile (required)
+#   region       default region (default: the profile's)
+#   login_hint   shown when the session has expired, e.g. "use aws-mfa-login"
+#   schema       overrides, as the library's: featureItemPK, featureItemSK,
+#                featureItemSKValue, featureItemPrefix, lookupIndexPK,
+#                featureItemEnabledPartition
+emulate -L zsh
+setopt extendedglob pipefail
+zmodload zsh/datetime
+path=(/opt/homebrew/bin $path)
+
+cache="${PANEL_SOURCE_CACHE:?run me through panel}"
+conf="${PANEL_SOURCE_CONFIG:-}"
+[[ -n $conf ]] || conf='{}'
+profile="$(jq -r '.profile // empty' <<<"$conf")"
+hint="$(jq -r '.login_hint // empty' <<<"$conf")"
+# the library's schema, with this table's overrides
+schema="$(jq -c '{featureItemPK: "pk", featureItemSK: "sk", featureItemSKValue: "A", featureItemPrefix: "FEAT#",
+                  lookupIndexPK: "pk1", featureItemEnabledPartition: "FEAT#ENABLED"} + (.schema // {})' <<<"$conf")"
+
+awsp() {
+  env -u AWS_ACCESS_KEY_ID -u AWS_SECRET_ACCESS_KEY -u AWS_SESSION_TOKEN -u AWS_PROFILE \
+    aws --profile "$profile" --output json "$@"
+}
+
+# An expired or missing session gets one clear line (it becomes the pane's header).
+fail() {
+  if grep -qE 'ExpiredToken|RequestExpired|NoCredentials|Unable to locate credentials|InvalidClientTokenId|could not be found' <<<"$1"; then
+    print -u2 "AWS session for '$profile' expired or missing${hint:+: $hint}"
+  else
+    print -u2 -r -- "${1:-aws failed}"
+  fi
+  exit 1
+}
+
+# DynamoDB's typed JSON -> plain JSON
+JQ_PLAIN='def plain: if type != "object" then . else
+  if has("S") then .S elif has("N") then (.N | tonumber) elif has("BOOL") then .BOOL elif has("NULL") then null
+  elif has("M") then (.M | map_values(plain)) elif has("L") then (.L | map(plain))
+  elif has("SS") then .SS elif has("NS") then (.NS | map(tonumber)) else . end end;'
+
+fetch() {
+  local query=$1 region table out
+  [[ -n $profile ]] || fail "no profile: set sources.feature-flags.profile"
+  [[ -n $query ]] || fail "no table: give the view a table name (region:table for another region)"
+  if [[ $query == *:* ]]; then region=${query%%:*} table=${query#*:}
+  else table=$query region="$(jq -r '.region // empty' <<<"$conf")"; fi
+  [[ -n $region ]] || region="$(aws configure get region --profile "$profile" 2>/dev/null)"
+  mkdir -p $cache
+  out="$(awsp dynamodb scan --region $region --table-name $table \
+           --filter-expression "begins_with(#pk, :prefix) AND #sk = :sk" \
+           --expression-attribute-names "$(jq -c '{"#pk": .featureItemPK, "#sk": .featureItemSK}' <<<"$schema")" \
+           --expression-attribute-values "$(jq -c '{":prefix": {S: .featureItemPrefix}, ":sk": {S: .featureItemSKValue}}' <<<"$schema")" \
+           2>&1)" || fail "$out"
+  # the flags, plain, for previews and search
+  jq -c --arg table $table --arg region $region --argjson schema "$schema" "$JQ_PLAIN"'
+    [.Items[] | map_values(plain)
+     | . + {_table: $table, _region: $region,
+            _name: (.name // (.[$schema.featureItemPK] | ltrimstr($schema.featureItemPrefix))),
+            _on: (.[$schema.lookupIndexPK] == $schema.featureItemEnabledPartition)}]' <<<"$out" \
+    > $cache/.flags.json && mv $cache/.flags.json "$cache/${region}__$table.json"
+  jq '
+    def epoch: if . == null then null else sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601 end;
+    sort_by(._name | ascii_downcase)
+    | map({ id: "\(._table):\(._name)", key: "",
+            status: (if ._on then "on" else "off" end),
+            status_color: (if ._on then "g" else null end),
+            updated: (.updatedAt | epoch? // 0),
+            title: (._name + (if (.description // "") != "" then "  \u001b[2m\(.description)\u001b[0m" else "" end)) })' \
+    "$cache/${region}__$table.json"
+}
+
+# every cached flag, as one JSON array
+flags() { local -a f=( $cache/*__*.json(N) ); (( $#f )) && jq -s 'add' $f || print '[]' }
+
+preview() {
+  flags | jq -r --arg id "$1" '
+    def when: sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601 | strflocaltime("%a %-d %b %Y %H:%M");
+    (map(select("\(._table):\(._name)" == $id)) | first) as $f
+    | if $f == null then "This flag is no longer in the cache." else
+      "# \($f._name)\n",
+      "**\(if $f._on then "on" else "off" end)**\(if $f.updatedAt then "  ·  changed \($f.updatedAt | when)" else "" end)  ",
+      "Table: `\($f._table)` (\($f._region))\(if $f.type then "  ·  type `\($f.type)`" else "" end)\n",
+      ( $f.description // empty | select(. != "") | "\(.)\n" ),
+      "## Item\n", "```json", ($f | with_entries(select(.key | startswith("_") | not)) | tojson), "```"
+      end'
+}
+
+search() {
+  flags | jq -r --arg q "$1" '
+    ($q | ascii_downcase | split(" ") | map(select(. != ""))) as $words
+    | .[] | "\(._name) \(.description // "") \(if ._on then "on" else "off" end) \(._table)" as $text
+    | select(all($words[]; . as $w | $text | ascii_downcase | contains($w)))
+    | ["\(._table):\(._name)", $text] | @tsv'
+}
+
+# summary <view>: "10 flags · 4 on", and a sentence for flags changed within the
+# pane's recent window
+summary() {
+  jq -c -L "${PANEL_CONFIG_DIR:-$HOME/.config/panel}/lib" 'include "summary";
+    . as $f | [.items[] | select(.status == "on")] as $on
+    | [.items[] | fresh($f)] as $changed
+    | {line: "\(.count) flags · \($on | length) on", word: "read"}
+      + (if ($changed | length) > 0 then
+          ($changed | map("\(.id | split(":")[1:] | join(":")) is \(.status)") | join(", ")) as $what
+          | {brief: ["Feature flags changed in \(.view): \($what).",
+                     "Heads up: in \(.view), \($what)."]}
+        else {} end)'
+}
+
+case $1 in
+  fetch)   fetch "$2" ;;
+  preview) preview "$2" ;;
+  search)  search "$2" ;;
+  summary) summary "$2" ;;
+  *) print -u2 "usage: feature-flags fetch [region:]<table> | preview <id> | search <words> | summary <view>"; exit 1 ;;
+esac
