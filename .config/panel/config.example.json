@@ -7,6 +7,14 @@
   "pause_when_idle": "10m",
 
   // A pane: a source, a query for it, and how often to fetch
+  // the HUD (panel hud): its name and voice (a Kokoro voice, or a blend)
+  "assistant": {
+    "name": "A.D.A.",
+    "meaning": "Always Diligent Assistant",
+    "voice": "bf_isabella",
+    "lang": "en-gb"
+  },
+
   "panes": {
     "jira": {
       "title": "Jira",

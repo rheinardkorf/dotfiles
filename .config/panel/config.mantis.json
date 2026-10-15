@@ -5,6 +5,14 @@
   // no fetching after this long without keyboard or mouse ("0" = never pause)
   "pause_when_idle": "10m",
 
+  // the HUD (panel hud, cmd+shift+a): I.R.I.S., a blend of two Kokoro voices
+  "assistant": {
+    "name": "I.R.I.S.",
+    "meaning": "Intelligent Reporting & Insight System",
+    "voice": {"af_jessica": 0.5, "af_river": 0.5},
+    "lang": "en-us"
+  },
+
   "panes": {
     // Jira, one pane with views (tab switches)
     "jira": {
@@ -46,6 +54,12 @@
       "every": "15m"
     },
 
+    // the assistant HUD as a window: silent, space for a briefing
+    "assistant": {
+      "title": "I.R.I.S.",
+      "type": "hud"
+    },
+
     // running agents (Claude Code sessions) and this turn's sub-agents, all local;
     // hooks in ~/.claude/settings.json (panel event agents) push changes in.
     // ctrl-o jumps to the agent's tmux pane
@@ -67,6 +81,7 @@
 
   "layouts": {
     "work": {
+      "iris": ["assistant"],
       "jira": ["jira"],
       "github": ["github"],
       "aws": ["aws"],

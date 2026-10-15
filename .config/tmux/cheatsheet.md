@@ -48,6 +48,7 @@
    prefix x       kill pane
    prefix !       break pane out into its own window
    prefix `       floating scratch shell
+   prefix A       the assistant HUD, full screen (cmd+shift+a; esc closes)
 
  CLAUDE AGENTS (markers set by Claude Code hooks)
    󰚩 on a window  Claude is waiting for you (permission / question); orange

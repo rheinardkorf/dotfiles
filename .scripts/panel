@@ -1,10 +1,14 @@
 #!/usr/bin/env zsh
 # panel: a tmux control panel of fzf lists over cached data.
 #
-#   panel up [layout]       build (or switch to) the tmux session "panel" for a layout
+#   panel up [layout]       build the tmux session "panel" for a layout, or repair it:
+#                           add the windows it's missing (then switch to it)
 #   panel fetch [pane...]   fetch now (every pane in the config if none given)
 #   panel fetcher [layout]  loop: fetch each pane of the layout when it's due
 #   panel view <pane>       the fzf list for one pane (what each tmux pane runs)
+#   panel hud [window]      the assistant HUD (full screen; cmd+shift+a opens it in a
+#                           tmux popup): a briefing from the cache, spoken. "window":
+#                           the silent, always-open version (a pane {"type": "hud"})
 #   panel event <source>    hand an event (stdin) to a source, then refresh its panes:
 #                           for pushes such as Claude Code hooks (always exits 0, silently)
 #
@@ -20,6 +24,7 @@
 #            or {name: {source, views: [...], ...}}   one pane, several views (tab
 #                                                     switches); each view is the query,
 #                                                     or views: {view: query, ...}
+#            or {name: {type: "hud", title}}          the assistant HUD as a window
 #            hidden_views: [view, ...]: not in the tab rotation, header or counts
 #                                       until alt-h reveals them (still fetched)
 #   layouts  {name: {window: [pane, ...]}}            one tmux window per context
@@ -28,6 +33,9 @@
 #   seen_after                                        e.g. "2s"
 #   pause_when_idle                                   no fetching after this long without
 #                                                     keyboard or mouse (default "10m", "0" = never)
+#   assistant                                         the HUD's {name, meaning, voice, lang, user}
+#                                                     (voice: a Kokoro voice, or a blend
+#                                                     {"af_jessica": 0.5, "af_river": 0.5})
 #   glow_style                                        glow style name or JSON path
 #                                                     (default: glow's own, from glow.yml)
 #
@@ -187,7 +195,7 @@ fetch_pane() {   # fetch_pane <unit>
   notify $pane
 }
 
-layout_panes() { conf --arg l "$1" '[.layouts[$l] // {} | .[][]] | unique | .[]' }
+layout_panes() { conf --arg l "$1" '. as $c | [.layouts[$l] // {} | .[][]] | unique | .[] | select($c.panes[.].source)' }
 layout_units() { local p; for p in ${(f)"$(layout_panes $1)"}; do pane_units $p; done }
 default_layout() { conf '.layouts | keys_unsorted[0] // empty' }
 
@@ -510,40 +518,93 @@ view() {
   done
 }
 
+# hud [window]: the assistant HUD (~/.config/panel/hud) over the default layout's panes
+hud() {
+  local mode=${1:-popup} job user
+  user="$(conf '.assistant.user // empty')"
+  [[ -n $user ]] || user="$(id -F 2>/dev/null)"; user=${user%% *}
+  job="$(mktemp "${TMPDIR:-/tmp}/panel-hud.XXXXXX")"
+  # every unit of the layout, in order, with what the HUD needs to know about it
+  conf --arg l "$(default_layout)" --arg user "$user" --arg cache "$PANEL_CACHE" --arg mode $mode '
+    . as $c | {assistant: (.assistant // {}), user: $user, cache: $cache, mode: $mode,
+      units: [ reduce ($c.layouts[$l][][]) as $p ([]; if any(.[]; . == $p) then . else . + [$p] end) | .[]
+        | . as $p | $c.panes[$p] as $P | select($P.source)
+        | if $P.views == null then {unit: $p, pane: $p, view: null, source: $P.source, title: ($P.title // $p), hidden: false}
+          else ($P.views | if type == "object" then keys_unsorted else . end)[] as $v
+            | {unit: "\($p)/\($v)", pane: $p, view: $v, source: $P.source, title: ($P.title // $p),
+               hidden: ($v | IN(($P.hidden_views // [])[]))} end ] }' > $job || die "can't read the config"
+  [[ $mode == window ]] || exec python3 -I "$PANEL_CONFIG_DIR/hud/hud.py" $job
+  python3 -I "$PANEL_CONFIG_DIR/hud/hud.py" $job
+}
+
+# hud_window: the HUD as a panel window: starts again if it ends (ctrl-c), and
+# when panel changes
+hud_window() {
+  trap 'exit 0' HUP TERM
+  while :; do
+    hud window
+    sleep 0.5
+    changed && exec $self hud window
+  done
+}
+
+# pane_cmd <pane>: what a pane of a layout runs
+pane_cmd() {
+  if [[ "$(conf --arg p $1 '.panes[$p].type // empty')" == hud ]]; then print -r -- "$self hud window"
+  else print -r -- "$self view $1"; fi
+}
+
+# up [layout]: build the session from the layout; if it's already there, repair
+# it: add the windows the layout has and the session lacks (in the layout's
+# order) and the fetch window. Windows are known by @panel_name; nothing is
+# removed, reordered or changed.
 up() {
-  local layout=${1:-$(default_layout)} win w first=1 p
-  local -a panes
+  local layout=${1:-$(default_layout)} win w prev="" p id name
+  local -a panes added
+  local -A have
   [[ -n $layout ]] || die "no layouts in the config"
   [[ -n "$(conf --arg l $layout '.layouts[$l] // empty')" ]] || die "unknown layout: $layout"
-  if ! tmux has-session -t "=$SESSION" 2>/dev/null; then
-    for win in ${(f)"$(conf --arg l $layout '.layouts[$l] | keys_unsorted[]')"}; do
-      panes=( ${(f)"$(conf --arg l $layout --arg w $win '.layouts[$l][$w][]')"} )
-      if (( first )); then
-        w="$(tmux new-session -d -s $SESSION -n $win -c ~ -P -F '#{window_id}' "$self view $panes[1]")"
-        first=0
-      else
-        w="$(tmux new-window -d -t "=$SESSION:" -n $win -c ~ -P -F '#{window_id}' "$self view $panes[1]")"
-      fi
-      tmux set-option -w -t $w @panel_name $win
-      for p in $panes[2,-1]; do tmux split-window -d -h -t $w -c ~ "$self view $p"; done
-      (( $#panes > 1 )) && tmux select-layout -t $w even-horizontal >/dev/null
-    done
-    tmux new-window -d -t "=$SESSION:" -n fetch -c ~ "$self fetcher $layout"
+  if tmux has-session -t "=$SESSION" 2>/dev/null; then
+    tmux list-windows -t "=$SESSION:" -F '#{window_id} #{?@panel_name,#{@panel_name},#{window_name}}' |
+      while read -r id name; do have[$name]=$id; done
   fi
+  for win in ${(f)"$(conf --arg l $layout '.layouts[$l] | keys_unsorted[]')"}; do
+    if [[ -n $have[$win] ]]; then prev=$have[$win]; continue; fi
+    panes=( ${(f)"$(conf --arg l $layout --arg w $win '.layouts[$l][$w][]')"} )
+    if ! tmux has-session -t "=$SESSION" 2>/dev/null; then
+      w="$(tmux new-session -d -s $SESSION -n $win -c ~ -P -F '#{window_id}' "$(pane_cmd $panes[1])")"
+    elif [[ -n $prev ]]; then   # right after the window before it in the layout
+      w="$(tmux new-window -d -a -t $prev -n $win -c ~ -P -F '#{window_id}' "$(pane_cmd $panes[1])")"
+    else                        # the layout's first window: in front
+      w="$(tmux new-window -d -b -t "=$SESSION:^" -n $win -c ~ -P -F '#{window_id}' "$(pane_cmd $panes[1])")"
+    fi
+    (( $#have )) && added+=( $win )
+    tmux set-option -w -t $w @panel_name $win
+    for p in $panes[2,-1]; do tmux split-window -d -h -t $w -c ~ "$(pane_cmd $p)"; done
+    (( $#panes > 1 )) && tmux select-layout -t $w even-horizontal >/dev/null
+    prev=$w
+  done
+  if [[ -z $have[fetch] ]]; then
+    w="$(tmux new-window -d -t "=$SESSION:" -n fetch -c ~ -P -F '#{window_id}' "$self fetcher $layout")"
+    tmux set-option -w -t $w @panel_name fetch
+    (( $#have )) && added+=( fetch )
+  fi
+  (( $#added )) && print "panel: added ${(j:, :)added}"
   if [[ -n $TMUX ]]; then tmux switch-client -t "=$SESSION"; else tmux attach -t "=$SESSION"; fi
 }
 
 # Commands you run: stop at a missing config, before anything else complains
-[[ $1 == (up|fetch|fetcher|view) ]] && conf empty
+[[ $1 == (up|fetch|fetcher|view|hud) ]] && conf empty
 
 case $1 in
   up)        up $2 ;;
-  fetch)     shift; (( $# )) || set -- ${(f)"$(conf '.panes | keys[]')"}
+  fetch)     shift; (( $# )) || set -- ${(f)"$(conf '.panes | to_entries[] | select(.value.source) | .key')"}
              for p in $@; do
                if [[ $p == */* ]]; then fetch_pane $p
                else for u in ${(f)"$(pane_units $p)"}; do fetch_pane $u; done; fi
              done ;;
   fetcher)   fetcher $2 ;;
+  hud)       if [[ $2 == window ]]; then hud_window; else hud; fi ;;
   view)      [[ -n $2 ]] || die "usage: panel view <pane>"; view $2 ;;
   event)     [[ -n $2 ]] && event $2 </dev/stdin >/dev/null 2>&1; exit 0 ;;
   _lines)    lines $2 $3 ;;

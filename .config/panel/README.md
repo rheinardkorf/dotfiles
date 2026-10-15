@@ -100,7 +100,9 @@ internally:
 ## 3. The engine: `~/.scripts/panel`
 
 - **`panel up`** builds the tmux session from a layout: one window per
-  context, one pane per entry, plus a `fetch` window.
+  context, one pane per entry, plus a `fetch` window. Run again, it repairs the
+  session: windows the layout has but the session lacks (known by their
+  `@panel_name`) come back in the layout's order; nothing else is touched.
 - **The fetcher** (`panel fetcher`) loops every 15 seconds and fetches each
   unit whose interval has passed. Each fetch writes the list and a status file
   (`ok`, or the error, which becomes the pane's header). It pauses after
@@ -152,6 +154,32 @@ fingerprint changes, and contributions never.
 
 kitty maps cmd-f and cmd+shift+h to the alt keys: kitty has its own cmd-f
 (scrollback search), and AeroSpace holds option-h.
+
+## The HUD: `panel hud`
+
+A full-screen assistant over everything, purely for show: cmd+shift+a (kitty)
+sends prefix A, which opens it in a borderless tmux popup; esc closes it, space
+skips the boot or repeats the briefing. Code in `hud/` (Python, standard
+library only).
+
+- **Boot**: the assistant's name resolves out of noise, then a systems check
+  (one line per pane: state and a short summary).
+- **HUD**: an arc reactor (pulsing faster the busier your agents are, peach when
+  one waits on you), the time, the Mac's CPU, memory and battery, a radar of
+  agents and a ticker of facts.
+- **Briefing**: spoken on open and typed along. `hud/speak.py` uses Kokoro (an
+  offline voice model in `~/.local/share/kokoro`, run through `uv`), one
+  sentence at a time, each cached by its text; without Kokoro it uses `say`.
+- **Per machine** (`assistant` in the config): mando is A.D.A. ("Always
+  Diligent Assistant", voice `bf_isabella`), mantis is I.R.I.S. ("Intelligent
+  Reporting & Insight System", a blend of `af_jessica` and `af_river`).
+
+As a window (a pane `{"type": "hud"}` in a layout; mantis has `iris` first) it
+stays open and silent: space speaks the briefing, it reads the cache again every
+15 seconds, and draws nothing while the window is off screen.
+
+Everything it shows comes from the cache, like the panes; CPU, memory and
+battery come from the Mac itself.
 
 ## Design rules
 
