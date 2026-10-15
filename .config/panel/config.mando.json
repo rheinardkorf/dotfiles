@@ -10,7 +10,10 @@
     "name": "A.D.A.",
     "meaning": "Always Diligent Assistant",
     "voice": "bf_isabella",
-    "lang": "en-gb"
+    "lang": "en-gb",
+    // HUD-only: the streak (gentle until 18:00, then urgent); s opens the logger
+    "sources": [{"source": "streak", "title": "Streak", "key": "s",
+                 "open": "~/.scripts/kitty-panel streak ~/.scripts/streak --width=600 --height=340 --edge=center-sized --opacity=1"}]
   },
 
   "panes": {
