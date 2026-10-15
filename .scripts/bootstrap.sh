@@ -213,6 +213,19 @@ else
   run "${KOKORO_ENV[@]}" >/dev/null 2>&1 || fail "could not set up the kokoro environment"
 fi
 
+# --- Streak log: a private repo every machine shares (~/.scripts/streak) --------
+echo "Streak log"
+STREAK_DIR="${STREAK_DIR:-$HOME/.local/share/streak}"
+STREAK_REPO="rheinardkorf/streak-log"
+if [[ -d "$STREAK_DIR/.git" ]]; then
+  okay "$STREAK_REPO in ${STREAK_DIR/#$HOME/~}"
+elif ! gh auth status >/dev/null 2>&1; then
+  $DRY_RUN && todo "$STREAK_REPO (gh needs a login first: gh auth login)" || fail "gh isn't logged in: gh auth login, then run this again"
+else
+  todo "$STREAK_REPO into ${STREAK_DIR/#$HOME/~}"
+  run gh repo clone "$STREAK_REPO" "$STREAK_DIR" -- -q || fail "could not clone $STREAK_REPO (does this gh account have access?)"
+fi
+
 # --- Machine name (used by SketchyBar / Hammerspoon) ---------------------------
 echo "Machine"
 if [[ -s "$HOME/.config/machine-name" ]]; then okay "machine-name: $(head -n1 "$HOME/.config/machine-name")"

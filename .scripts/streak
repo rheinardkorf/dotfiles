@@ -6,186 +6,234 @@
 #                       1-9 tick a target, t / a save today as toward / away,
 #                       s show stats, q close
 #   streak status     one line: streak, freezes and whether today is logged
-#   streak stats      per target: share of all logged days vs share of toward days
+#   streak stats      per target: share of logged days vs share of toward days
 #   streak json       the derived state and stats as JSON
 #   streak pause <from> [<to>] [note]   take days off, planned ahead (today or later)
-#   streak pause      list upcoming pauses
-#   streak unpause <from> [<to>]        remove paused days
+#   streak pause      list pauses that haven't ended
+#   streak unpause <from> [<to>]        take days out of pauses
+#   streak sync       pull, then push anything not pushed yet
 #
-# Targets: ~/.config/streak/targets.json, [{"key": ..., "label": ...}], with
-# targets.local.json (not in dotfiles) merged by key: a local entry adds a target,
-# or relabels one. Keep keys stable: history is stored under them.
+# The data is a private git repo (rheinardkorf/streak-log) cloned to
+# ~/.local/share/streak (STREAK_DIR overrides; the bootstrap clones it), shared by
+# every machine: one person, one streak.
+#   targets.json              [{"key": ..., "label": ..., "retired": true?}]
+#   days/<date>.json          {"date": ..., "targets": {"printing": true, ...}, "toward": true}
+#   pauses/<from>_<to>.json   {"from": ..., "to": ..., "note": ...}
+# The logger pulls when it opens (in the background), and every change is committed
+# and pushed in the background; offline, commits wait for the next sync. The same
+# day saved on two machines: the save being synced wins.
 #
-# Log: ~/notes/streak.json (STREAK_FILE overrides), one record per day:
-#   {"date": "2026-10-14", "targets": {"printing": true, ...}, "toward": true}
-# Streak, freezes and the calendar are derived from it, never stored. Every 7-day
-# streak earns a freeze (at most 3 banked); a day with nothing ticked, or no entry,
-# uses one up instead of resetting the streak.
+# Streak, freezes and the calendar are worked out from the files every time, never
+# stored. Every 7-day streak earns a freeze (at most 3 banked); a day with nothing
+# ticked, or no entry, uses one up instead of resetting the streak.
 #
-# Pauses are days declared off before they happen (travel, holidays):
-#   {"date": "2026-10-20", "paused": true, "note": "Sydney"}
-# A paused day doesn't count, use a freeze or reset the streak, and stays out of
-# the stats. Past days can't be paused (no rescuing a broken streak), days already
-# logged are skipped, and logging a paused day replaces the pause: it counts as usual.
+# Pauses are days declared off before they happen (travel, holidays). A paused day
+# with no entry doesn't count, use a freeze or reset the streak, and stays out of the
+# stats. Past days can't be paused (no rescuing a broken streak); a day logged during
+# a pause counts as usual.
+#
+# Targets: keep keys stable (history is stored under them). A new target's stats
+# start from the first day it was logged; a retired one leaves the checklist but
+# stays in the stats.
 emulate -L zsh
 setopt extendedglob pipefail
 zmodload zsh/datetime
 path=(/opt/homebrew/bin $path)
 
-TARGETS_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/streak"
-LOG="${STREAK_FILE:-$HOME/notes/streak.json}"
+DIR="${STREAK_DIR:-$HOME/.local/share/streak}"
 FREEZE_EVERY=7
 FREEZE_CAP=3
 STATS_AFTER=7     # logged days before the stats mean anything
 
 die() { print -u2 "streak: $*"; exit 1 }
 
+today() { strftime %Y-%m-%d $EPOCHSECONDS }
+
+# noon <date>: its epoch at noon (so day arithmetic can't trip over DST)
+noon() { strftime -r '%Y-%m-%d %H' "$1 12" }
+add_days() { strftime %Y-%m-%d $(( $(noon $1) + $2 * 86400 )) }
+days_between() { print $(( ($(noon $2) - $(noon $1)) / 86400 + 1 )) }
+
+# date_ok <date>: a real YYYY-MM-DD date
+date_ok() {
+  local t
+  [[ $1 == <1900-2999>-<01-12>-<01-31> ]] && t="$(noon $1 2>/dev/null)" &&
+    [[ "$(strftime %Y-%m-%d $t)" == $1 ]]
+}
+
+need_repo() {
+  [[ -d $DIR/.git ]] || die "no streak log in $DIR: gh repo clone rheinardkorf/streak-log $DIR (the bootstrap does this)"
+  [[ -r $DIR/targets.json ]] || die "no targets: create $DIR/targets.json"
+}
+
 # jq helpers shared by the commands
 JQ_DEFS='
   def day: strptime("%Y-%m-%d") | mktime;
   def nice: day | strftime("%a %e %b") | gsub("  "; " ");
-  # ranges: consecutive paused days (same note) as {from, to, note}
-  def ranges: map(select(.paused)) | sort_by(.date)
-    | reduce .[] as $p ([];
-        if length > 0 and (.[-1].to | day) + 86400 == ($p.date | day) and .[-1].note == $p.note
-        then .[-1].to = $p.date else . + [{from: $p.date, to: $p.date, note: $p.note}] end);
   def range_text: (if .from == .to then (.from | nice) else "\(.from | nice) – \(.to | nice)" end)
     + (if .note then " (\(.note))" else "" end);
 '
 
-today() { strftime %Y-%m-%d $EPOCHSECONDS }
+entries() { local -a f=($DIR/days/*.json(N)); (( $#f )) && jq -s 'sort_by(.date)' $f || print '[]' }
+pauses()  { local -a f=($DIR/pauses/*.json(N)); (( $#f )) && jq -s 'sort_by(.from)' $f || print '[]' }
 
-# targets: the merged list, as a JSON array
-targets() {
-  local base=$TARGETS_DIR/targets.json local_file=$TARGETS_DIR/targets.local.json
-  [[ -r $base || -r $local_file ]] || die "no targets: create $base"
-  jq -s '
-    add | reduce .[] as $t ([];
-      if any(.[]; .key == $t.key) then map(if .key == $t.key then . + $t else . end)
-      else . + [$t] end)
-  ' ${base}(N) ${local_file}(N)
+# write_json <file>: stdin to a file, atomically, on one line: two machines saving
+# the same day then conflict as a whole, never merging half of each
+write_json() {
+  local tmp
+  mkdir -p ${1:h}
+  tmp="$(mktemp ${1:h}/.streak.XXXX)" || die "can't write ${1:h}"
+  jq -c . > $tmp && mv $tmp $1 || { rm -f $tmp; die "can't write $1" }
 }
 
-entries() { [[ -s $LOG ]] && cat $LOG || print '[]' }
+# --- sync ---------------------------------------------------------------------
+
+g() { GIT_TERMINAL_PROMPT=0 git -C $DIR "$@" }
+
+# pull: quiet, gives up after a few seconds (offline is fine)
+pull() {
+  g remote get-url origin >/dev/null 2>&1 || return 0
+  GIT_TERMINAL_PROMPT=0 timeout 8 git -C $DIR pull -q --rebase -X theirs --autostash >/dev/null 2>&1
+}
+
+# commit <message>: commit whatever changed, then push in the background (it
+# outlives the popup); a failed push leaves the commit for the next sync
+commit() {
+  g add -A days pauses targets.json 2>/dev/null
+  g diff --cached --quiet && return 0
+  g commit -q -m "$1" >/dev/null || return 1
+  nohup zsh -c 'export GIT_TERMINAL_PROMPT=0
+    timeout 30 git -C "$1" pull -q --rebase -X theirs --autostash && timeout 30 git -C "$1" push -q' _ $DIR >/dev/null 2>&1 &!
+}
+
+# unpushed: how many commits aren't on the remote yet
+unpushed() { g rev-list --count @{u}..HEAD 2>/dev/null || g rev-list --count HEAD 2>/dev/null || print 0 }
+
+cmd_sync() {
+  pull || print -u2 "streak: pull failed (offline?)"
+  if (( $(unpushed) )); then
+    GIT_TERMINAL_PROMPT=0 timeout 30 git -C $DIR push -q && print "Synced." ||
+      die "push failed; the commits are kept for next time"
+  else
+    print "Synced. Nothing to push."
+  fi
+}
+
+# --- the streak ---------------------------------------------------------------
 
 # state: walk every day from the first entry to today (see the header)
 state() {
-  entries | jq --arg today "$(today)" --argjson every $FREEZE_EVERY --argjson cap $FREEZE_CAP "$JQ_DEFS"'
+  entries | jq --arg today "$(today)" --argjson pauses "$(pauses)" \
+      --argjson every $FREEZE_EVERY --argjson cap $FREEZE_CAP "$JQ_DEFS"'
     def freeze_or_reset($miss): if .freezes > 0 then .freezes -= 1 | .status = "frozen"
-                         else .streak = 0 | .status = $miss end;
+                                else .streak = 0 | .status = $miss end;
+    def paused($d): any($pauses[]; .from <= $d and $d <= .to);
     (map({key: .date, value: .}) | from_entries) as $by
-    | ([.[] | select(.paused and .date > $today)] | ranges) as $upcoming
     | if length == 0 then {streak: 0, freezes: 0, days: []} else
         reduce range([.[].date] | min | day; ($today | day) + 1; 86400) as $t
           ({streak: 0, freezes: 0, days: []};
            ($t | strftime("%Y-%m-%d")) as $d | $by[$d] as $e
-           | if $e.paused then .status = "paused"
-             elif $e != null and ([$e.targets[]] | any) then
+           | if $e != null and ([$e.targets[]] | any) then
                .streak += 1
                | if .streak % $every == 0 and .freezes < $cap then .freezes += 1 else . end
                | .status = (if $e.toward then "toward" else "away" end)
              elif $e != null then
                freeze_or_reset("\(if $e.toward then "toward" else "away" end)-nostreak")
+             elif paused($d) then .status = "paused"
              elif $d == $today then .status = "pending"
              else freeze_or_reset("missed") end
            | .days += [{date: $d, status}] | del(.status))
       end
-    | .today = ($by[$today]) | .upcoming = $upcoming'
+    | .today = $by[$today]
+    | .paused_today = ([$pauses[] | select(.from <= $today and $today <= .to)] | first)
+    | .upcoming = [$pauses[] | select(.from > $today)]'
 }
 
-# stats: per target, % of logged days it was ticked vs % of toward days
+# stats: per target, % of logged days it was ticked vs % of toward days, counted
+# only over the days the target existed (its key is in the entry)
 stats() {
-  jq -n --argjson targets "$(targets)" --argjson all "$(entries)" '
-    [$all[] | select(.paused | not)] as $e
-    | ($e | length) as $n | [$e[] | select(.toward)] as $tw
-    | def pct($set; $k): if ($set | length) == 0 then null
-        else ([$set[] | select(.targets[$k])] | length) * 100 / ($set | length) | round end;
-    {days: $n, toward_days: ($tw | length),
-     targets: [$targets[] | {key, label, all: pct($e; .key), toward: pct($tw; .key)}]}'
+  jq -n --slurpfile targets $DIR/targets.json --argjson e "$(entries)" '
+    def pct($set; $k): if ($set | length) == 0 then null
+      else ([$set[] | select(.targets[$k])] | length) * 100 / ($set | length) | round end;
+    {days: ($e | length), toward_days: ([$e[] | select(.toward)] | length),
+     targets: [$targets[0][] | .key as $k
+       | [$e[] | select(.targets | has($k))] as $mine
+       | {key, label, retired: (.retired // false), days: ($mine | length),
+          all: pct($mine; $k), toward: pct([$mine[] | select(.toward)]; $k)}]}'
 }
 
-# save <toward true|false> <key=bool>...: replace today's record
+# save <toward true|false> <key=bool>...: replace today's entry (ticks of retired
+# targets already in it are kept)
 save() {
   local toward=$1; shift
-  local tmp
-  mkdir -p ${LOG:h}
-  tmp="$(mktemp ${LOG:h}/.streak.XXXX)" || die "can't write ${LOG:h}"
-  entries | jq --arg d "$(today)" --argjson toward $toward \
+  local d="$(today)"
+  local f=$DIR/days/$d.json
+  jq -n --arg d $d --argjson toward $toward \
+      --argjson old "$([[ -r $f ]] && cat $f || print '{}')" \
       --argjson t "$(print -l -- $@ | jq -R 'split("=") | {(.[0]): (.[1] == "true")}' | jq -s 'add // {}')" '
-    [.[] | select(.date != $d)] + [{date: $d, targets: $t, toward: $toward}] | sort_by(.date)
-  ' > $tmp && mv $tmp $LOG || { rm -f $tmp; die "save failed" }
+    {date: $d, targets: (($old.targets // {}) + $t), toward: $toward}' | write_json $f
+  commit "$d: $([[ $toward == true ]] && print toward || print away)"
 }
 
 cmd_status() {
-  local s; s="$(state)"
-  jq -r '"🔥 \(.streak)  ❄ \(.freezes)  today: " +
-    (if .today == null then "not logged" elif .today.paused then "paused"
-     elif .today.toward then "toward" else "away" end)' <<<$s
-}
-
-# date_ok <date>: a real YYYY-MM-DD date
-date_ok() {
-  local t
-  [[ $1 == <1900-2999>-<01-12>-<01-31> ]] && t="$(strftime -r %Y-%m-%d $1 2>/dev/null)" &&
-    [[ "$(strftime %Y-%m-%d $t)" == $1 ]]
-}
-
-# write_log <jq filter> [jq args...]: rewrite the log through a filter
-write_log() {
-  local filter=$1; shift
-  local tmp
-  mkdir -p ${LOG:h}
-  tmp="$(mktemp ${LOG:h}/.streak.XXXX)" || die "can't write ${LOG:h}"
-  entries | jq "$@" "$JQ_DEFS$filter" > $tmp && mv $tmp $LOG || { rm -f $tmp; die "save failed" }
-}
-
-cmd_pause() {
-  if (( ! $# )); then
-    entries | jq -r --arg today "$(today)" "$JQ_DEFS"'
-      [.[] | select(.paused and .date >= $today)] | ranges
-      | if length == 0 then "No pauses planned." else .[] | "‖ \(range_text)" end'
-    return
-  fi
-  local from=$1 to=$1; shift
-  date_ok $from || die "not a date: $from (use YYYY-MM-DD)"
-  if (( $# )) && [[ $1 == <->-<->-<-> ]]; then to=$1; shift; date_ok $to || die "not a date: $to"; fi
-  local note="$*" today_d="$(today)"
-  [[ $from < $today_d ]] && die "pauses are planned ahead: $from has already passed"
-  [[ $to < $from ]] && die "$to is before $from"
-  local before after
-  before="$(entries | jq '[.[] | select(.paused)] | length')"
-  write_log '
-    (map(.date) | INDEX(.)) as $taken
-    | . + [range($from | day; ($to | day) + 1; 86400) | strftime("%Y-%m-%d")
-           | select($taken[.] == null)
-           | {date: ., paused: true} + (if $note == "" then {} else {note: $note} end)]
-    | sort_by(.date)' --arg from $from --arg to $to --arg note "$note"
-  after="$(entries | jq '[.[] | select(.paused)] | length')"
-  print "‖ Paused $(( after - before )) day(s): $(jq -rn --arg f $from --arg t $to --arg n "$note" "$JQ_DEFS"'{from: $f, to: $t, note: (if $n == "" then null else $n end)} | range_text')"
-  (( after - before == $(( ($(strftime -r %Y-%m-%d $to) - $(strftime -r %Y-%m-%d $from)) / 86400 + 1 )) )) ||
-    print "  (days already logged or paused were left as they are)"
-}
-
-cmd_unpause() {
-  (( $# )) || die "usage: streak unpause <from> [<to>]"
-  local from=$1 to=${2:-$1}
-  date_ok $from || die "not a date: $from"; date_ok $to || die "not a date: $to"
-  local before; before="$(entries | jq 'length')"
-  write_log '[.[] | select((.paused and .date >= $from and .date <= $to) | not)]' --arg from $from --arg to $to
-  print "Removed $(( before - $(entries | jq 'length') )) paused day(s)."
+  state | jq -r '"🔥 \(.streak)  ❄ \(.freezes)  today: " +
+    (if .today != null then (if .today.toward then "toward" else "away" end)
+     elif .paused_today then "paused" else "not logged" end)'
 }
 
 cmd_stats() {
-  local st; st="$(stats)"
-  jq -r --argjson after $STATS_AFTER '
+  stats | jq -r --argjson after $STATS_AFTER '
     if .days < $after then "Stats after \($after) logged days (\(.days) so far)."
     else
       def pad($w): tostring | (" " * ([$w - length, 0] | max)) + .;
       def pct: if . == null then "-" else "\(.)%" end;
       "\(.days) days logged, \(.toward_days) toward.", "",
       "   all  toward",
-      (.targets[] | "\(.all | pct | pad(6))  \(.toward | pct | pad(6))  \(.label)")
-    end' <<<$st
+      (.targets[] | "\(.all | pct | pad(6))  \(.toward | pct | pad(6))  \(.label)"
+        + (if .retired then " (retired)" else "" end))
+    end'
+}
+
+# --- pauses -------------------------------------------------------------------
+
+pause_json() { jq -n --arg f $1 --arg t $2 --arg n "$3" '{from: $f, to: $t} + (if $n == "" then {} else {note: $n} end)' }
+
+cmd_pause() {
+  if (( ! $# )); then
+    pauses | jq -r --arg today "$(today)" "$JQ_DEFS"'
+      [.[] | select(.to >= $today)]
+      | if length == 0 then "No pauses planned." else .[] | "‖ \(range_text)" end'
+    return
+  fi
+  local from=$1 to=$1; shift
+  date_ok $from || die "not a date: $from (use YYYY-MM-DD)"
+  if (( $# )) && [[ $1 == <->-<->-<-> ]]; then to=$1; shift; date_ok $to || die "not a date: $to"; fi
+  local note="$*"
+  [[ $from < $(today) ]] && die "pauses are planned ahead: $from has already passed"
+  [[ $to < $from ]] && die "$to is before $from"
+  pause_json $from $to "$note" | write_json $DIR/pauses/${from}_${to}.json
+  commit "pause $from – $to${note:+ ($note)}"
+  print "‖ Paused $(days_between $from $to) day(s): $(jq -r "$JQ_DEFS"'range_text' $DIR/pauses/${from}_${to}.json)"
+}
+
+# unpause <from> [<to>]: take these days out of every pause (one can split in two)
+cmd_unpause() {
+  (( $# )) || die "usage: streak unpause <from> [<to>]"
+  local x=$1 y=${2:-$1} f a b note p n=0
+  date_ok $x || die "not a date: $x"; date_ok $y || die "not a date: $y"
+  [[ $y < $x ]] && die "$y is before $x"
+  for f in $DIR/pauses/*.json(N); do
+    a="$(jq -r .from $f)" b="$(jq -r .to $f)" note="$(jq -r '.note // ""' $f)"
+    [[ $a > $y || $b < $x ]] && continue
+    rm $f; (( n++ ))
+    local -a parts=()
+    [[ $a < $x ]] && parts+=("$a $(add_days $x -1)")
+    [[ $b > $y ]] && parts+=("$(add_days $y 1) $b")
+    for p in $parts; do pause_json ${p% *} ${p#* } "$note" | write_json $DIR/pauses/${p% *}_${p#* }.json; done
+  done
+  (( n )) || { print "No pause covers those days."; return }
+  commit "unpause $x – $y"
+  cmd_pause
 }
 
 # --- the logger ---------------------------------------------------------------
@@ -199,18 +247,20 @@ typeset -A STRIP=(
 logger() {
   local -a keys labels
   local -A ticks
-  local s key toward= paused= upcoming= dirty=0 show_stats=0 msg= i
-  local tj; tj="$(targets)"
-  keys=( ${(f)"$(jq -r '.[].key' <<<$tj)"} )
-  labels=( ${(f)"$(jq -r '.[].label' <<<$tj)"} )
-  (( $#keys )) || die "no targets"
-  (( $#keys <= 9 )) || die "more than 9 targets; keep the list short"
+  local s key toward= paused= upcoming= dirty=0 show_stats=0 msg= i sync=syncing
+  local flag="$(mktemp -u ${TMPDIR:-/tmp}/streak-pull.XXXX)"
 
   load() {
+    local tj; tj="$(jq 'map(select(.retired | not))' $DIR/targets.json)"
+    keys=( ${(f)"$(jq -r '.[].key' <<<$tj)"} )
+    labels=( ${(f)"$(jq -r '.[].label' <<<$tj)"} )
+    (( $#keys )) || die "no targets"
+    (( $#keys <= 9 )) || die "more than 9 targets; keep the list short"
     s="$(state)"
-    toward="$(jq -r '.today | if . == null or .paused then empty else .toward end' <<<$s)"
-    paused="$(jq -r '.today.paused // empty' <<<$s)"
+    toward="$(jq -r '.today | if . == null then empty else .toward end' <<<$s)"
+    paused="$(jq -r "$JQ_DEFS"'.paused_today // empty | range_text' <<<$s)"
     upcoming="$(jq -r "$JQ_DEFS"'.upcoming[] | "‖ Paused \(range_text)"' <<<$s)"
+    ticks=()
     for i in {1..$#keys}; do
       ticks[$keys[i]]="$(jq -r --arg k $keys[i] '.today.targets[$k] // false' <<<$s)"
     done
@@ -218,15 +268,20 @@ logger() {
   }
 
   draw() {
-    local streak freezes strip st
+    local streak freezes strip st note line
     streak="$(jq -r .streak <<<$s)" freezes="$(jq -r .freezes <<<$s)"
     strip=
     for st in ${(f)"$(jq -r '.days[-28:][].status' <<<$s)"}; do strip+="${STRIP[$st]} "; done
+    case $sync in
+      syncing) note='syncing…' ;;
+      offline) note='offline: saves sync later' ;;
+      *) (( $(unpushed) )) && note='not pushed yet' || note= ;;
+    esac
     print -n '\e[H\e[2J'
-    print -P " %BStreak%b   🔥 $streak   ❄ $freezes/$FREEZE_CAP%F{8}   $(strftime '%a %e %b' $EPOCHSECONDS)%f"
+    print -P " %BStreak%b   🔥 $streak   ❄ $freezes/$FREEZE_CAP%F{8}   $(strftime '%a %e %b' $EPOCHSECONDS)${note:+   $note}%f"
     [[ -n $strip ]] || strip='%F{8}nothing logged yet%f'
     print -P " $strip"
-    local line; for line in ${(f)upcoming}; do print -P " %F{8}$line%f"; done
+    for line in ${(f)upcoming}; do print -P " %F{8}$line%f"; done
     print
     for i in {1..$#keys}; do
       if [[ $ticks[$keys[i]] == true ]]; then print -P "  %F{8}$i%f %F{green}[x]%f $labels[i]"
@@ -238,7 +293,7 @@ logger() {
     elif [[ -n $toward ]]; then
       print -P "  %F{yellow}Changed:%f %Bt%b toward  %Ba%b away to save again"
     elif [[ -n $paused ]]; then
-      print -P "  %F{8}Paused today.%f Logging still counts: %Bt%b toward  %Ba%b away"
+      print -P "  %F{8}Paused: $paused.%f Logging still counts: %Bt%b toward  %Ba%b away"
     else
       print -P "  Today: %Bt%b toward  %Ba%b away"
     fi
@@ -249,12 +304,19 @@ logger() {
   }
 
   print -n '\e[?25l'
-  trap 'print -n "\e[?25h"' EXIT
+  trap "print -n '\e[?25h'; rm -f $flag" EXIT
   trap 'exit 0' INT TERM
   load
+  # pull in the background: the popup opens at once, and reloads when it's done
+  { pull; print $? > $flag } &!
+  draw
   while true; do
-    draw
-    read -sk1 key || exit 0
+    if [[ $sync == syncing && -s $flag ]]; then
+      [[ "$(<$flag)" == 0 ]] && sync=ok || sync=offline
+      (( dirty )) || load
+      draw
+    fi
+    read -t 0.25 -sk1 key || continue
     msg=
     case $key in
       [1-9])
@@ -269,17 +331,23 @@ logger() {
         msg="%F{green}✓%f Saved. 🔥 $(jq -r .streak <<<$s)" ;;
       s) (( show_stats = !show_stats )) ;;
       q) exit 0 ;;
+      *) continue ;;
     esac
+    draw
   done
 }
 
+case ${1:-log} in
+  -h|--help|help) sed -n '2,/^emulate/{/^emulate/d;s/^# \{0,1\}//;p;}' $0; exit 0 ;;
+esac
+need_repo
 case ${1:-log} in
   log) logger ;;
   status) cmd_status ;;
   stats) cmd_stats ;;
   pause) shift; cmd_pause "$@" ;;
   unpause) shift; cmd_unpause "$@" ;;
+  sync) cmd_sync ;;
   json) jq -n --argjson state "$(state)" --argjson stats "$(stats)" '$state + {stats: $stats}' ;;
-  -h|--help|help) sed -n '2,/^emulate/{/^emulate/d;s/^# \{0,1\}//;p;}' $0 ;;
-  *) print -u2 "usage: streak [status | stats | json | pause | unpause]"; exit 2 ;;
+  *) print -u2 "usage: streak [status | stats | json | pause | unpause | sync]"; exit 2 ;;
 esac
