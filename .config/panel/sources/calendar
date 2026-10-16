@@ -16,7 +16,7 @@
 emulate -L zsh
 setopt extendedglob pipefail
 zmodload zsh/datetime
-path=(/opt/homebrew/bin $HOME/Development/go/bin $HOME/go/bin $path)
+path=($HOME/Development/go/bin $HOME/go/bin $path)
 
 cache="${PANEL_SOURCE_CACHE:?run me through panel}"
 conf="$PANEL_SOURCE_CONFIG"
@@ -126,7 +126,7 @@ search() {
 # summary <view>: the HUD's line (and briefing sentences) for one view, from the
 # facts on stdin (see ~/.config/panel/lib/summary.jq); prints JSON
 summary() {
-  jq -c -L "${PANEL_CONFIG_DIR:-$HOME/.config/panel}/lib" 'include "summary";
+  jq -c -L "${PANEL_HOME:-${PANEL_CONFIG_DIR:-$HOME/.config/panel}}/lib" 'include "summary";
     .now as $now
     | if .next then ((.next.at - $now) as $in | (.next.title | clean) as $t
         | {line: "next: \($t) in \($in | span)", word: "synced",

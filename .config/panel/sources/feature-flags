@@ -31,7 +31,6 @@
 emulate -L zsh
 setopt extendedglob pipefail
 zmodload zsh/datetime
-path=(/opt/homebrew/bin $path)
 
 cache="${PANEL_SOURCE_CACHE:?run me through panel}"
 conf="${PANEL_SOURCE_CONFIG:-}"
@@ -133,7 +132,7 @@ search() {
 # summary <view>: "10 flags · 4 on", and a sentence for flags changed within the
 # pane's recent window
 summary() {
-  jq -c -L "${PANEL_CONFIG_DIR:-$HOME/.config/panel}/lib" 'include "summary";
+  jq -c -L "${PANEL_HOME:-${PANEL_CONFIG_DIR:-$HOME/.config/panel}}/lib" 'include "summary";
     . as $f | [.items[] | select(.status == "on")] as $on
     | [.items[] | fresh($f)] as $changed
     | {line: "\(.count) flags · \($on | length) on", word: "read"}

@@ -1,6 +1,7 @@
 {
-  // Copy to config.<machine>.json (name in ~/.config/machine-name). Anything
-  // that shouldn't be public goes in config.local.json, merged on top.
+  // Copy to config.<machine>.json (the name: $PANEL_MACHINE, or the hostname,
+  // lowercased). Anything that shouldn't be public goes in config.local.json,
+  // merged on top.
   // An item counts as seen after the cursor rests on it this long
   "seen_after": "2s",
   // no fetching after this long without keyboard or mouse ("0" = never pause)

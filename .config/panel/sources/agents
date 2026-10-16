@@ -29,7 +29,6 @@ emulate -L zsh
 setopt extendedglob pipefail
 zmodload zsh/datetime
 zmodload -F zsh/stat b:zstat
-path=(/opt/homebrew/bin $path)
 
 cache="${PANEL_SOURCE_CACHE:?run me through panel}"
 conf="$PANEL_SOURCE_CONFIG"
@@ -328,7 +327,7 @@ event() {
 # summary <view>: the HUD's line (and briefing sentences) for one view, from the
 # facts on stdin (see ~/.config/panel/lib/summary.jq); prints JSON
 summary() {
-  jq -c -L "${PANEL_CONFIG_DIR:-$HOME/.config/panel}/lib" 'include "summary";
+  jq -c -L "${PANEL_HOME:-${PANEL_CONFIG_DIR:-$HOME/.config/panel}}/lib" 'include "summary";
     def name: if (.key // "·") != "·" then .key else (.title | clean | split(" ")[0]) end;
     [.items[] | select(.kind != null and (.id | startswith("sub:") | not))] as $s
     | ([$s[] | select(.status == "busy")] | length) as $busy

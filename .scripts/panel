@@ -15,7 +15,7 @@
 # Everything shown is read from the cache (~/.cache/panel); only fetching talks
 # to the outside world.
 #
-# Config, per machine (name from ~/.config/machine-name, or $PANEL_MACHINE):
+# Config, per machine (name from $PANEL_MACHINE, or the hostname):
 #   ~/.config/panel/config.<machine>.json   committed: this machine's panes and layouts
 #   ~/.config/panel/config.local.json       optional, not committed: merged on top, for
 #                                           anything that shouldn't be public
@@ -64,7 +64,10 @@
 #   glow_style                                        glow style name or JSON path
 #                                                     (default: glow's own, from glow.yml)
 #
-# Sources are scripts in ~/.config/panel/sources/<name>:
+# Sources are scripts named <name>, looked up in two places, first match wins:
+#   ~/.config/panel/sources/      your own (and your copy of a built-in one, to change it)
+#   $PANEL_HOME/sources/          panel's built-in ones
+# (PANEL_HOME: panel's own files, hud/ lib/ sources/; today that's ~/.config/panel too)
 #   <source> fetch <query>   print the items as JSON: [{id, title, status, updated, url, key?, at?, seen?}]
 #                            (updated in epoch seconds; key: a shorter id for the list;
 #                            at: a start time to count down to; seen: the key seen
@@ -93,7 +96,7 @@
 #   <source> summary <view>  optional: the HUD's line for a view, from its facts on
 #                            stdin ({view, count, unseen, bad, next, error, now, recent, items}):
 #                            prints {line, state: "attention", word, brief: [phrasings
-#                            of one sentence], ticker: [...]} (~/.config/panel/lib/summary.jq).
+#                            of one sentence], ticker: [...]} ($PANEL_HOME/lib/summary.jq).
 #                            A pane with "summary": "pane" is asked once: stdin is
 #                            {pane: true, views: [facts, ...], now, recent}
 #   <source> event           optional: an event on stdin (panel event); exit 0 when
@@ -115,10 +118,16 @@ emulate -L zsh
 setopt extendedglob pipefail
 zmodload zsh/system zsh/datetime
 zmodload -F zsh/stat b:zstat
-path=(/opt/homebrew/bin /Applications/kitty.app/Contents/MacOS $path)   # kitten: images
+# Homebrew (Apple Silicon, Intel, Linux) and kitty's kitten (images), where they exist:
+# tmux and launchers start panel with a bare PATH. Sources run through panel, so they get it too
+path=(/opt/homebrew/bin(N) /usr/local/bin(N) /home/linuxbrew/.linuxbrew/bin(N)
+      /Applications/kitty.app/Contents/MacOS(N) $path)
+typeset -U path
 
 PANEL_CONFIG_DIR="${PANEL_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/panel}"
 PANEL_CACHE="${PANEL_CACHE:-${XDG_CACHE_HOME:-$HOME/.cache}/panel}"
+PANEL_HOME="${PANEL_HOME:-$PANEL_CONFIG_DIR}"   # panel's own files: hud/, lib/, built-in sources/
+export PANEL_CONFIG_DIR PANEL_HOME                # sources find lib/ through PANEL_HOME
 SESSION=panel
 FETCHER_SESSION=panel-fetcher   # the fetcher's own session: out of the way of panel's windows
 self="${0:A}"
@@ -128,12 +137,10 @@ die() { print -u2 "panel: $*"; exit 1 }
 # conf [jq args...]: query the config: this machine's file with config.local.json
 # merged on top (objects merge, everything else is replaced), // comment lines stripped
 conf() {
-  local name_file="${XDG_CONFIG_HOME:-$HOME/.config}/machine-name" machine=$PANEL_MACHINE f
-  [[ -n $machine || ! -r $name_file ]] || machine="$(<$name_file)"
-  machine=${machine//[[:space:]]/}
-  [[ -n $machine ]] || die "no machine name: put one in $name_file (or set PANEL_MACHINE)"
+  local machine=${PANEL_MACHINE//[[:space:]]/} f
+  [[ -n $machine ]] || machine=${(L)HOST%%.*}   # no name given: the hostname, e.g. mando
   f="$PANEL_CONFIG_DIR/config.$machine.json"
-  [[ -f $f ]] || die "no config for \"$machine\": $f (see config.example.json)"
+  [[ -f $f ]] || die "no config for \"$machine\": $f (see config.example.json; or name this machine with PANEL_MACHINE)"
   # merged once into the cache, again only when a config file changes: a view
   # switch asks dozens of questions, and merging each time made it sluggish
   local merged="$PANEL_CACHE/config.$machine.json" src
@@ -228,13 +235,22 @@ cur_unit() {
   print -r -- $1/$v
 }
 
+# source_path <source>: the script for a source, yours before panel's built-in one
+source_path() {
+  local d
+  for d in $PANEL_CONFIG_DIR/sources $PANEL_HOME/sources; do
+    [[ -x $d/$1 ]] && { print -r -- $d/$1; return }
+  done
+  return 1
+}
+
 # Run a source script with its cache and config.
 run_source() {
-  local source=$1; shift
-  [[ -x $PANEL_CONFIG_DIR/sources/$source ]] || { print -u2 "panel: no source script: $source"; return 1 }
+  local source=$1 script; shift
+  script="$(source_path $source)" || { print -u2 "panel: no source script: $source"; return 1 }
   PANEL_SOURCE_CACHE="$PANEL_CACHE/sources/$source" \
   PANEL_SOURCE_CONFIG="$(conf -c --arg s "$source" '.sources[$s] // {}')" \
-    "$PANEL_CONFIG_DIR/sources/$source" "$@"
+    $script "$@"
 }
 
 # Tell every open view of a unit's pane to re-read the cache. Each view has its
@@ -803,7 +819,7 @@ view() {
   done
 }
 
-# hud [window]: the assistant HUD (~/.config/panel/hud) over the default layout's panes
+# hud [window]: the assistant HUD ($PANEL_HOME/hud) over the default layout's panes
 hud() {
   local mode=${1:-popup} job user
   user="$(conf '.assistant.user // empty')"
@@ -811,9 +827,10 @@ hud() {
   job="$(mktemp "${TMPDIR:-/tmp}/panel-hud.XXXXXX")"
   # every unit of the layout, in order, with what the HUD needs to know about it
   conf --arg l "$(default_layout)" --arg user "$user" --arg cache "$PANEL_CACHE" --arg mode $mode \
-    --arg config_dir "$PANEL_CONFIG_DIR" --arg files "$(print -rl -- $PANEL_CONFIG_DIR/config.*.json(N))" '
+    --arg config_dir "$PANEL_CONFIG_DIR" --arg home "$PANEL_HOME" --arg files "$(print -rl -- $PANEL_CONFIG_DIR/config.*.json(N))" '
     . as $c | {assistant: (.assistant // {}), user: $user, cache: $cache, mode: $mode,
-      windows: ($c.layouts[$l] // {}), sources: ($c.sources // {}), config_dir: $config_dir,
+      windows: ($c.layouts[$l] // {}), sources: ($c.sources // {}), config_dir: $config_dir, home: $home,
+      source_dirs: ["\($config_dir)/sources", "\($home)/sources"],
       config_files: ($files | split("\n") | map(select(. != ""))),
       units: [ reduce ($c.layouts[$l][][]) as $p ([]; if any(.[]; . == $p) then . else . + [$p] end) | .[]
         | . as $p | $c.panes[$p] as $P | select($P.source)
@@ -829,8 +846,8 @@ hud() {
         # HUD-only sources (assistant.sources): no pane, window or fetch; asked for a summary
         + [(.assistant.sources // [])[] | {unit: "hud/\(.source)", pane: "hud:\(.source)", view: null, source: .source,
             title: (.title // .source), key: .key, open: .open, hidden: false, summary: true, hud_only: true}] }' > $job || die "can't read the config"
-  [[ $mode == window ]] || exec python3 -I "$PANEL_CONFIG_DIR/hud/hud.py" $job
-  python3 -I "$PANEL_CONFIG_DIR/hud/hud.py" $job
+  [[ $mode == window ]] || exec python3 -I "$PANEL_HOME/hud/hud.py" $job
+  python3 -I "$PANEL_HOME/hud/hud.py" $job
 }
 
 # hud_window: the HUD as a panel window: starts again if it ends (ctrl-c), and

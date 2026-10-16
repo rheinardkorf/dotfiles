@@ -23,7 +23,6 @@
 emulate -L zsh
 setopt extendedglob pipefail
 zmodload zsh/datetime
-path=(/opt/homebrew/bin $path)
 
 cache="${PANEL_SOURCE_CACHE:?run me through panel}"
 conf="$PANEL_SOURCE_CONFIG"
@@ -488,7 +487,7 @@ preview() {
 # summary <view>: the HUD's line (and briefing sentences) for one view, from the
 # facts on stdin (see ~/.config/panel/lib/summary.jq); prints JSON
 summary() {
-  jq -c -L "${PANEL_CONFIG_DIR:-$HOME/.config/panel}/lib" 'include "summary";
+  jq -c -L "${PANEL_HOME:-${PANEL_CONFIG_DIR:-$HOME/.config/panel}}/lib" 'include "summary";
     def title: .title | clean;
     if .view == "actions" then
       if .bad > 0 then {line: "\(.bad) failing", state: "attention",

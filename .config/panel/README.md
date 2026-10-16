@@ -32,8 +32,10 @@ A tmux control panel of fzf lists over cached data. **Sources** fetch data, a
 ## 1. Config: what you want to see
 
 `config.<machine>.json` (committed; the machine name comes from
-`~/.config/machine-name`), with `config.local.json` (not committed) merged on
-top. JSON, with full-line `//` comments allowed. See `config.example.json`.
+`$PANEL_MACHINE`, or else the hostname, lowercased: `mando`), with
+`config.local.json` (not committed) merged on top. JSON, with full-line `//`
+comments allowed. See `config.example.json`. These dotfiles set `PANEL_MACHINE`
+from `~/.config/machine-name` (`~/.config/zsh/configs/pre/04-machine.zsh`).
 
 - **panes**: a source plus either one `query`, or several `views` (a list of
   names, or `{name: query}`). Each pane also has `every` (one interval, or one
@@ -53,7 +55,13 @@ The basic unit is a **unit**: a pane, or one view of a pane (`aws/sqs`,
 
 ## 2. Sources: the only code that knows a service
 
-Each source is a small zsh script in `sources/` with up to three commands:
+Each source is a small zsh script in `sources/` with up to three commands. Panel
+looks for it in two places, and the first match wins: `~/.config/panel/sources/`
+(yours), then `$PANEL_HOME/sources/` (panel's built-in ones). `PANEL_HOME` holds
+panel's own files (`hud/`, `lib/`, built-in `sources/`); today it's the same
+`~/.config/panel`, so the two are one folder. To change a built-in source, copy it
+into yours.
+
 
 | Command | Does | Rule |
 |---|---|---|
@@ -281,6 +289,7 @@ battery come from the Mac itself.
 1. Create `sources/<name>` (executable), reading `$PANEL_SOURCE_CACHE` (its own
    cache folder) and `$PANEL_SOURCE_CONFIG` (its `sources.<name>` settings as
    JSON). `$PANEL_SINCE` is the last good fetch of the unit (epoch), if any.
+   `$PANEL_HOME/lib` has `summary.jq` (`jq -L "$PANEL_HOME/lib" 'include "summary"; ...'`).
 2. `fetch <query>`: print a JSON array of items on stdout; errors on stderr
    (the last lines become the pane's header) and a non-zero exit.
 3. `preview <id>`: print Markdown, from the cache only.

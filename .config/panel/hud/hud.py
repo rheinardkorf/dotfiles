@@ -245,6 +245,16 @@ def summarize(job, units):
     count is shown instead)."""
     now = int(time.time())
     config_dir = job.get("config_dir") or os.path.expanduser("~/.config/panel")
+    home = job.get("home") or config_dir
+    # a source's script: yours (config_dir/sources) before panel's built-in one
+    dirs = job.get("source_dirs") or [os.path.join(config_dir, "sources")]
+
+    def script(source):
+        for d in dirs:
+            p = os.path.join(d, source)
+            if os.access(p, os.X_OK):
+                return p
+        return None
 
     def facts_of(f):
         nxt = f["next"]
@@ -254,11 +264,14 @@ def summarize(job, units):
                 "error": f["error"], "now": now, "items": f["items"]}
 
     def ask(source, view, facts_in):
-        env = dict(os.environ, PANEL_CONFIG_DIR=config_dir,
+        path = script(source)
+        if not path:
+            return None
+        env = dict(os.environ, PANEL_CONFIG_DIR=config_dir, PANEL_HOME=home,
                    PANEL_SOURCE_CACHE=os.path.join(job["cache"], "sources", source),
                    PANEL_SOURCE_CONFIG=json.dumps((job.get("sources") or {}).get(source) or {}))
         try:
-            r = subprocess.run([os.path.join(config_dir, "sources", source), "summary", view or ""],
+            r = subprocess.run([path, "summary", view or ""],
                                input=json.dumps(facts_in), capture_output=True, text=True, timeout=5, env=env)
             out = json.loads(r.stdout) if r.returncode == 0 and r.stdout.strip() else None
             return out if isinstance(out, dict) else None
