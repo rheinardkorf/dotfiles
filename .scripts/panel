@@ -40,7 +40,11 @@
 #            actions: {"alt-r": {"tag": "later", "icon": "󰃀", "name": "read later"}}
 #                     keys that toggle a tag on the item under the cursor (shown as
 #                     its icon); a view whose query is "tagged:later" lists the
-#                     pane's tagged items (built from the cache, never fetched)
+#                     pane's tagged items (built from the cache, never fetched).
+#                     Or {"run": "toggle"}: the source's `run toggle <id>`; if the
+#                     source has `confirm toggle <id>`, a Yes/No popup asks first
+#                     (No unless y); the result shows in tmux's status line and the
+#                     view is fetched again
 #            key: "a"   its key on the HUD (jumps to its window; case matters,
 #                       digits work; default: a letter of its title)
 #            hidden_views: [view, ...]: not in the tab rotation, header or counts
@@ -78,6 +82,12 @@
 #                            only (panel renders it with glow)
 #   <source> search <words>  optional: "<id>\t<snippet>" for each cached item whose
 #                            content has all the words (used by alt-f)
+#   <source> run <name> <id>  optional: an action that does something (feature-flags:
+#                            toggle); prints one line; exit 0 = changed, and the source
+#                            has updated its cache: panel then re-lists the view with
+#                            PANEL_FETCH_LOCAL=1 (fetch from the cache only, no calls)
+#   <source> confirm <name> <id>  optional: the question to ask first (first line,
+#                            then detail); nothing printed = no need to ask
 #   <source> action <tag> <id> on|off   optional: a tag was toggled (e.g. rss keeps
 #                            a copy of a saved article, so it outlives its feed)
 #   <source> summary <view>  optional: the HUD's line for a view, from its facts on
@@ -155,8 +165,10 @@ load_pane() {
   f=( "${(@f)$(conf --arg p "${1%%/*}" '.panes[$p] // {} | [.source // "", .title // $p,
       (.views // [] | if type == "object" then keys_unsorted else . end | join("\u001f")),
       (.hidden_views // [] | join("\u001f")), .list // "", .preview // "", (.count != false | tostring),
-      (.actions // {} | [.[] | {(.tag): (.icon // "★")}] | add // {} | tojson),
-      (.actions // {} | to_entries | map("\(.key)\u001f\(.value.tag)") | join("\u001e"))] | .[]')}" )
+      (.actions // {} | [.[] | select(.tag) | {(.tag): (.icon // "★")}] | add // {} | tojson),
+      (.actions // {} | to_entries
+       | map("\(.key)\u001f\(if .value.run then "run" else "tag" end)\u001f\(.value.run // .value.tag)")
+       | join("\u001e"))] | .[]')}" )
   LOADED_PANE=${1%%/*} P_SOURCE=$f[1] P_TITLE=$f[2] P_LIST=$f[5] P_PREVIEW=$f[6] P_COUNT=$f[7]
   P_ICONS=${f[8]:-\{\}} P_ACTIONS=$f[9]
   P_VIEWS=( ${(ps:\x1f:)f[3]} ) P_HIDDEN=( ${(ps:\x1f:)f[4]} )
@@ -257,20 +269,29 @@ fetch_pane() {   # fetch_pane <unit>
     notify $pane
     return 0
   fi
+  # while it runs, its views say "fetching…" (the marker holds this process's id,
+  # so one left by a killed fetch is ignored)
+  print $$ > $dir/fetching
+  notify $pane
   since="$(jq -r '.ok_at // empty' $dir/meta.json 2>/dev/null)"
   out="$(mktemp $dir/.items.XXXX)" err="$(mktemp $dir/.err.XXXX)"
   # stdin from /dev/null: a fetch must never wait on the terminal it runs in
   if PANEL_SINCE=$since run_source $source fetch "$query" < /dev/null > $out 2> $err &&
      jq -e 'type == "array"' $out >/dev/null 2>&1; then
     mv $out $dir/items.json
-    jq -n --argjson t $EPOCHSECONDS '{ok_at: $t, fetched_at: $t}' > $dir/.meta && mv $dir/.meta $dir/meta.json
+    # a local re-list (PANEL_FETCH_LOCAL, after an action) isn't a fetch: the
+    # "fetched" time and the fetcher's schedule stay as they were
+    [[ -n $PANEL_FETCH_LOCAL ]] ||
+      { jq -n --argjson t $EPOCHSECONDS '{ok_at: $t, fetched_at: $t}' > $dir/.meta && mv $dir/.meta $dir/meta.json }
+  elif [[ -n $PANEL_FETCH_LOCAL ]]; then
+    rm -f $out   # a re-list that couldn't: leave the list and meta as they were
   else
     rm -f $out
     jq -n --argjson t $EPOCHSECONDS --arg e "$(tail -3 $err)" --arg ok "$since" \
       '{ok_at: ($ok | tonumber? // null), fetched_at: $t, error: (if $e == "" then "fetch failed" else $e end)}' \
       > $dir/.meta && mv $dir/.meta $dir/meta.json
   fi
-  rm -f $err
+  rm -f $err $dir/fetching
   exec {fd}>&-
   notify $pane
 }
@@ -354,6 +375,62 @@ SEEN="$PANEL_CACHE/seen.json"
 # later") toggle them; the item is kept with its tag, for the tag views.
 TAGS="$PANEL_CACHE/tags.json"
 tags_json() { [[ -s $TAGS ]] && cat $TAGS || print '{}' }
+
+# run_action <pane> <pid> <id> <name>: the source's `run <name> <id>`, in the
+# terminal (it may ask and confirm); when it changed something (exit 0), the view
+# is fetched again before the list comes back
+run_action() {
+  local pane=$1 unit="$(cur_unit $1 $2)" id=$3 name=$4 source question out
+  source="$(pane_source $pane)"
+  [[ -n $id && -n $name ]] || return 0
+  # the source's question, if it has one: a Yes/No popup over the list (No unless y)
+  if question="$(run_source $source confirm $name $id 2>&1)" && [[ -n $question ]]; then
+    ask "$question" || { say "Cancelled: nothing changed."; return 0 }
+  elif [[ -n $question ]]; then
+    say "$question"; return 0   # it can't be done (e.g. the item is gone)
+  fi
+  if out="$(run_source $source run $name $id < /dev/null 2>&1)"; then
+    say "$out"
+    # the list again from the source's cache, which the action has updated: no
+    # fetch (the source re-lists from its cache when PANEL_FETCH_LOCAL is set)
+    { PANEL_FETCH_LOCAL=1 fetch_pane $unit } </dev/null >/dev/null 2>&1 &!
+  else
+    say "${out:-$name failed}"
+  fi
+  return 0
+}
+
+# say <message>: a few seconds in tmux's status line
+say() {
+  if [[ -n $TMUX ]]; then tmux display-message -d 4000 -- "$1" 2>/dev/null; else print -u2 -r -- "$1"; fi
+}
+
+# ask <question>: a small Yes/No popup (first line is the question, the rest
+# detail); succeeds only on y. Outside tmux there is nowhere to ask: no.
+ask() {
+  [[ -n $TMUX ]] || return 1
+  local q="$(mktemp ${TMPDIR:-/tmp}/panel-ask.XXXXXX)" r w h line
+  print -r -- "$1" > $q
+  w=24; for line in ${(f)1}; do (( ${#line} + 6 > w )) && w=$(( ${#line} + 6 )); done
+  h=$(( ${#${(f)1}} + 5 ))
+  tmux display-popup -E -w $w -h $h -T " confirm " "$self _yesno $q" 2>/dev/null
+  r="$(cat $q.yes 2>/dev/null)"
+  rm -f $q $q.yes
+  [[ $r == yes ]]
+}
+
+# yesno <file>: inside the popup: show the question, read one key, y means yes
+yesno() {
+  local -a lines=( ${(f)"$(<$1)"} )
+  local key line
+  print -P " %B$lines[1]%b"
+  for line in $lines[2,-1]; do print -P " %F{8}$line%f"; done
+  print
+  print -nP " %F{green}y%f yes     %Bn%b / enter  no "
+  read -k1 -s key
+  [[ $key == [yY] ]] && print yes > $1.yes
+  return 0
+}
 
 # toggle_tag <pane> <pid> <id> <tag>: on the item under the cursor, then tell the
 # source (on / off) and rebuild the pane's tag views
@@ -441,7 +518,8 @@ update_window_name() {
 # One line per item: "<id>\t<display>"; the first line is a header (status of the fetch).
 lines() {   # lines <pane> <pid>
   local pane="$(cur_unit $1 $2)" tabs="" v cur
-  local dir="$PANEL_CACHE/panes/$pane"
+  local dir="$PANEL_CACHE/panes/$pane" fetching=""
+  [[ -f $dir/fetching ]] && kill -0 "$(<$dir/fetching)" 2>/dev/null && fetching=1
   # views: all of them in the header, the one shown in bold, each with its
   # unseen count (●new ◆changed) so the window's ●N can be found
   if [[ $pane == */* ]]; then
@@ -495,6 +573,7 @@ lines() {   # lines <pane> <pid>
   [[ -s $TAGS ]] || print '{}' > $TAGS
   jq -r --arg src "$(pane_source $pane)" --argjson now $EPOCHSECONDS --arg tabs "$tabs" \
     --arg list "$P_LIST" --argjson width $width --argjson icons "${P_ICONS:-\{\}}" --slurpfile tags $TAGS \
+    --arg fetching "$fetching" \
     --argjson matches "$matches" --arg words "$words" \
     --argjson seen "$(seen_json)" --argjson m "$(cat $dir/meta.json 2>/dev/null || print '{}')" \
     "$JQ_STATE"'
@@ -524,6 +603,7 @@ lines() {   # lines <pane> <pid>
     (if $matches then map(select($matches[.id] != null) | .title += "  " + $dim + "… " + $matches[.id] + " …" + $off) else . end) |
     ( "\t" + $dim + $tabs + $off
       + (if $matches then rgb("249;226;175") + "find \"\($words)\": \(length) match\(if length == 1 then "" else "es" end)  ·  " + $off else "" end)
+      + (if $fetching != "" then rgb("137;220;235") + "fetching…  ·  " + $off else "" end)
       + if $m.error then rgb("243;139;168") + "fetch failed at \($m.fetched_at | hm): \($m.error | split("\n")[0])  ·  showing \($m.ok_at | hm)" + $off
              else $dim + "fetched \($m.ok_at | hm)  ·  \(length) items  ·  ● new  ◆ changed" + $off end ),
     # tag icons (panes with actions): a column after the marker
@@ -672,10 +752,17 @@ view() {
   [[ -n $TMUX_PANE ]] && tmux set-option -p -t $TMUX_PANE @panel_pane $pane
   # where the preview goes: the default (beside the list only if the preview
   # gets 110 columns, else under it), or the pane's own "preview"
-  # the pane's actions: each key toggles its tag on the item under the cursor
-  local -a acts=() a
+  # the pane's actions: a key toggles a tag on the item under the cursor, or runs a
+  # source command on it (interactive: fzf steps aside while it asks and works)
+  local -a acts=() part
+  local a
   for a in ${(ps:\x1e:)P_ACTIONS}; do
-    acts+=( --bind "${a%%$'\x1f'*}:execute-silent($self _tag $pane $$ {1} ${a#*$'\x1f'})+reload($self _lines $pane $$)" )
+    part=( ${(ps:\x1f:)a} )
+    if [[ $part[2] == run ]]; then
+      acts+=( --bind "${part[1]}:execute-silent($self _run $pane $$ {1} ${part[3]})+reload($self _lines $pane $$)" )
+    else
+      acts+=( --bind "${part[1]}:execute-silent($self _tag $pane $$ {1} ${part[3]})+reload($self _lines $pane $$)" )
+    fi
   done
   local pw="$(conf --arg p $pane '.panes[$p].preview // empty')"
   case $pw in
@@ -810,7 +897,7 @@ up() {
 }
 
 # The per-view commands fzf runs all start with a pane: load its settings once
-[[ $1 == (view|_tag|_remember|_lines|_prompt|_toggle_find|_esc|_reveal|_find|_view|_fetch_now|_preview|_focus|_open|_seen_all|_unseen) && -n $2 ]] && load_pane $2
+[[ $1 == (view|_tag|_run|_remember|_lines|_prompt|_toggle_find|_esc|_reveal|_find|_view|_fetch_now|_preview|_focus|_open|_seen_all|_unseen) && -n $2 ]] && load_pane $2
 
 # Commands you run: stop at a missing config, before anything else complains
 [[ $1 == (up|fetch|fetcher|view|hud) ]] && conf empty
@@ -836,6 +923,8 @@ case $1 in
   _remember) remember_cursor $2 $3 $4 ;;
   _cursor)   restore_cursor $2 $3 "$4" ;;
   _tag)      toggle_tag $2 $3 $4 $5 ;;
+  _run)      run_action $2 $3 $4 $5 ;;
+  _yesno)    yesno $2 ;;
   _fetch_now) fetch_pane "$(cur_unit $2 $3)" ;;
   _preview)  preview $2 $3 $4 ;;
   _focus)    on_focus "$(cur_unit $2 $3)" $4 ;;

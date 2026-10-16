@@ -194,7 +194,7 @@ summary of the `later` view.
 | enter / ctrl-o | full preview / open in the browser (agents: jump to the tmux pane) |
 | alt-s / alt-u | mark all seen / mark this one unseen |
 | alt-r (rss) | read later: toggle the article on the reading list (a pane's `actions`) |
-| ctrl-r | fetch this view now |
+| ctrl-r | fetch this view now (the header says "fetching…" until it's done, as it does for scheduled fetches) |
 | home / end | top / bottom of the list (page up / down: a page) |
 | esc | clear the filter (or leave find) |
 

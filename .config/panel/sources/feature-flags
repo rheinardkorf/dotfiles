@@ -1,6 +1,7 @@
 #!/usr/bin/env zsh
 # panel source: feature flags kept in DynamoDB the way @x-team-systems/
-# sls-dynamodb-feature-flags stores them, through the aws CLI. Read-only.
+# sls-dynamodb-feature-flags stores them, through the aws CLI. Read-only, except
+# `run toggle` (alt-t), which turns one flag on or off once you've said yes.
 #
 #   feature-flags fetch <table>          every flag in the table, alphabetical
 #   feature-flags fetch <region>:<table>   (a table in another region)
@@ -8,6 +9,9 @@
 #   feature-flags search <words>         "<id>\t<snippet>" for flags matching all the words
 #   feature-flags summary <view>         the HUD's line (and a sentence when a flag
 #                                        changed within the pane's recent window)
+#   feature-flags confirm toggle <id>    the question panel asks first (a Yes/No popup)
+#   feature-flags run toggle <id>        turn the flag on / off: the same write as
+#                                        the library's enableFeature / disableFeature
 #
 # Each flag is one item: pk = FEAT#<name>, sk = A, name, description, type,
 # updatedAt; it's on when pk1 = FEAT#ENABLED (the partition the library's GSI
@@ -36,7 +40,8 @@ profile="$(jq -r '.profile // empty' <<<"$conf")"
 hint="$(jq -r '.login_hint // empty' <<<"$conf")"
 # the library's schema, with this table's overrides
 schema="$(jq -c '{featureItemPK: "pk", featureItemSK: "sk", featureItemSKValue: "A", featureItemPrefix: "FEAT#",
-                  lookupIndexPK: "pk1", featureItemEnabledPartition: "FEAT#ENABLED"} + (.schema // {})' <<<"$conf")"
+                  lookupIndexPK: "pk1", lookupIndexSK: "sk1", featureItemEnabledPartition: "FEAT#ENABLED"}
+                 + (.schema // {})' <<<"$conf")"
 
 awsp() {
   env -u AWS_ACCESS_KEY_ID -u AWS_SECRET_ACCESS_KEY -u AWS_SESSION_TOKEN -u AWS_PROFILE \
@@ -67,6 +72,12 @@ fetch() {
   else table=$query region="$(jq -r '.region // empty' <<<"$conf")"; fi
   [[ -n $region ]] || region="$(aws configure get region --profile "$profile" 2>/dev/null)"
   mkdir -p $cache
+  # after a toggle (PANEL_FETCH_LOCAL): just list the cached flags again, no scan
+  if [[ -n $PANEL_FETCH_LOCAL ]]; then
+    [[ -f "$cache/${region}__$table.json" ]] || fail "nothing cached for $table yet"
+    render "$cache/${region}__$table.json"
+    return
+  fi
   out="$(awsp dynamodb scan --region $region --table-name $table \
            --filter-expression "begins_with(#pk, :prefix) AND #sk = :sk" \
            --expression-attribute-names "$(jq -c '{"#pk": .featureItemPK, "#sk": .featureItemSK}' <<<"$schema")" \
@@ -79,6 +90,11 @@ fetch() {
             _name: (.name // (.[$schema.featureItemPK] | ltrimstr($schema.featureItemPrefix))),
             _on: (.[$schema.lookupIndexPK] == $schema.featureItemEnabledPartition)}]' <<<"$out" \
     > $cache/.flags.json && mv $cache/.flags.json "$cache/${region}__$table.json"
+  render "$cache/${region}__$table.json"
+}
+
+# render <cache file>: the cached flags as panel items, alphabetical
+render() {
   jq '
     def epoch: if . == null then null else sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601 end;
     sort_by(._name | ascii_downcase)
@@ -87,7 +103,7 @@ fetch() {
             status_color: (if ._on then "g" else null end),
             updated: (.updatedAt | epoch? // 0),
             title: (._name + (if (.description // "") != "" then "  \u001b[2m\(.description)\u001b[0m" else "" end)) })' \
-    "$cache/${region}__$table.json"
+    "$1"
 }
 
 # every cached flag, as one JSON array
@@ -128,7 +144,73 @@ summary() {
         else {} end)'
 }
 
+# flag <id>: the cached flag, and what toggling it means (sets f table region name
+# pk on want)
+flag() {
+  f="$(flags | jq -c --arg id "$1" 'map(select("\(._table):\(._name)" == $id)) | first // empty')"
+  [[ -n $f ]] || { print -u2 "That flag isn't in the cache any more."; return 1 }
+  table="$(jq -r ._table <<<"$f")" region="$(jq -r ._region <<<"$f")" name="$(jq -r ._name <<<"$f")"
+  pk="$(jq -r --argjson s "$schema" '.[$s.featureItemPK]' <<<"$f")"
+  on="$(jq -r ._on <<<"$f")"; [[ $on == true ]] && want=off || want=on
+}
+
+# confirm toggle <id>: the question (first line), then a line of detail
+confirm_toggle() {
+  local f table region name pk on want
+  flag $1 || return 1
+  print -r -- "Turn ${(U)want} $name?"
+  print -r -- "$table · $region · $profile"
+}
+
+# run toggle <table>:<name>: on <-> off, as the library writes it (enable: SET pk1 =
+# FEAT#ENABLED, sk1 = <name>; disable: REMOVE pk1, sk1; both SET updatedAt, and
+# only if the item exists). Prints one line; exit 0 when it changed.
+toggle() {
+  local f table region name pk on want out now
+  flag $1 || return 1
+  now="$(date -u +%Y-%m-%dT%H:%M:%S.000Z)"
+  local names values expr
+  names="$(jq -c '{"#pk": .featureItemPK, "#pk1": .lookupIndexPK, "#sk1": .lookupIndexSK, "#u": "updatedAt"}' <<<"$schema")"
+  if [[ $want == on ]]; then
+    expr="SET #pk1 = :pk1, #sk1 = :sk1, #u = :u"
+    values="$(jq -nc --arg p "$(jq -r .featureItemEnabledPartition <<<"$schema")" --arg n $name --arg u $now \
+                '{":pk1": {S: $p}, ":sk1": {S: $n}, ":u": {S: $u}}')"
+  else
+    expr="REMOVE #pk1, #sk1 SET #u = :u"
+    values="$(jq -nc --arg u $now '{":u": {S: $u}}')"
+  fi
+  out="$(awsp dynamodb update-item --region $region --table-name $table \
+           --key "$(jq -nc --argjson s "$schema" --arg pk $pk '{($s.featureItemPK): {S: $pk}, ($s.featureItemSK): {S: $s.featureItemSKValue}}')" \
+           --update-expression "$expr" --condition-expression "attribute_exists(#pk)" \
+           --expression-attribute-names "$names" --expression-attribute-values "$values" \
+           --return-values ALL_NEW 2>&1)" || {
+    if [[ $out == *ConditionalCheckFailed* ]]; then print -r -- "No such flag in $table: nothing changed."
+    elif grep -qE 'ExpiredToken|RequestExpired|NoCredentials|Unable to locate credentials|InvalidClientTokenId' <<<"$out"; then
+      print -r -- "AWS session for '$profile' expired or missing${hint:+: $hint}. Nothing changed."
+    else print -r -- "Failed, nothing changed: ${${(f)out}[-1]}"; fi
+    return 1
+  }
+  # the item as written (ALL_NEW) replaces the cached one: no scan to see it
+  local file="$cache/${region}__$table.json"
+  jq -c --argjson new "$(jq -c "$JQ_PLAIN"' .Attributes | map_values(plain)' <<<"$out")" --argjson schema "$schema" '
+    map(if ._name == ($new.name // ($new[$schema.featureItemPK] | ltrimstr($schema.featureItemPrefix)))
+        then $new + {_table, _region, _name, _on: ($new[$schema.lookupIndexPK] == $schema.featureItemEnabledPartition)}
+        else . end)' $file > $file.tmp && mv $file.tmp $file
+  print -r -- "$name is ${(U)want} · running apps see it within ~30s"
+  return 0
+}
+
 case $1 in
+  confirm)
+    case $2 in
+      toggle) confirm_toggle "$3" ;;
+      *) exit 1 ;;
+    esac ;;
+  run)
+    case $2 in
+      toggle) toggle "$3" ;;
+      *) print -u2 "feature-flags: unknown action '$2' (try: toggle)"; exit 1 ;;
+    esac ;;
   fetch)   fetch "$2" ;;
   preview) preview "$2" ;;
   search)  search "$2" ;;
