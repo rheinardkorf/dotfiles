@@ -7,6 +7,18 @@ hyper = {"cmd", "alt", "shift", "ctrl"}
 -- Define ultra as Ctrl+Option+Cmd
 ultra = {"ctrl", "alt", "cmd"}
 
+-- Machine name from ~/.config/machine-name (the MDM controls the computer name),
+-- falling back to the system name if that file doesn't exist
+local function machineName()
+    local f = io.open(os.getenv("HOME") .. "/.config/machine-name", "r")
+    if f then
+        local name = f:read("*l")
+        f:close()
+        if name and name:match("%S") then return name:match("^%s*(.-)%s*$") end
+    end
+    return hs.host.localizedName()
+end
+
 -- Bind hyper + s to launch Slack
 hs.hotkey.bind(hyper, "s", function()
     hs.application.launchOrFocus("Slack")
@@ -51,7 +63,8 @@ end)
 
 -- Bind hyper + p to the panel session (built or repaired; kitty opened if needed)
 hs.hotkey.bind(hyper, "p", function()
-    hs.task.new("/bin/zsh", nil, {"-c", os.getenv("HOME") .. "/.scripts/panel-open"}):start()
+    -- panel finds its config by PANEL_MACHINE; zsh -c here doesn't read .zshrc, which exports it
+    hs.task.new("/bin/zsh", nil, {"-c", "PANEL_MACHINE=" .. machineName() .. " " .. os.getenv("HOME") .. "/.scripts/panel-open"}):start()
 end)
 
 -- Get the current window app id
@@ -89,17 +102,6 @@ local mqtt_pass = getEnvVar("MQTT_PASS")
 local mosquitto_pub = hs.execute("which mosquitto_pub", true):gsub("%s+", "")
 
 -- Device and topic setup
--- Machine name from ~/.config/machine-name (the MDM controls the computer name),
--- falling back to the system name if that file doesn't exist
-local function machineName()
-    local f = io.open(os.getenv("HOME") .. "/.config/machine-name", "r")
-    if f then
-        local name = f:read("*l")
-        f:close()
-        if name and name:match("%S") then return name:match("^%s*(.-)%s*$") end
-    end
-    return hs.host.localizedName()
-end
 local mac_hostname = machineName()
 -- Camera topic
 local mqtt_camera_topic = "office/" .. mac_hostname .. "/camera"
