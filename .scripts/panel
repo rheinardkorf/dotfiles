@@ -896,6 +896,7 @@ up() {
     fi
     (( $#have )) && added+=( $win )
     tmux set-option -w -t $w @panel_name $win
+    tmux set-option -w -t $w allow-passthrough on   # preview images (kitty graphics) get through
     for p in $panes[2,-1]; do tmux split-window -d -h -t $w -c ~ "$(pane_cmd $p)"; done
     (( $#panes > 1 )) && tmux select-layout -t $w even-horizontal >/dev/null
     prev=$w

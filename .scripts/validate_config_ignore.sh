@@ -28,6 +28,7 @@ should_track=(
   "$HOME/.config/panel/sources/aws"
   "$HOME/.config/panel/sources/calendar"
   "$HOME/.config/panel/config.example.json"
+  "$HOME/.config/panel/panel.tmux"
   "$HOME/.config/panel/config.mantis.json"
   "$HOME/.config/panel/config.mando.json"
   "$HOME/.claude/CLAUDE.md"

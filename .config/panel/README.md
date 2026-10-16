@@ -158,7 +158,13 @@ internally:
   the list updates without moving the cursor.
 - **Images**: a preview starting with `<!-- panel:image <path> -->` gets that
   picture drawn above the text (`kitten icat` with unicode placeholders, which
-  pass through tmux and fzf; needs `allow-passthrough on`).
+  pass through tmux and fzf; `panel up` turns on `allow-passthrough` for
+  panel's windows).
+- **tmux keys**: `panel.tmux` binds them; tmux.conf loads it with
+  `run-shell ~/.config/panel/panel.tmux` (or a plugin manager). Options, set
+  before it: `@panel-bin` (the engine, default `bin/panel` beside it; here
+  `~/.scripts/panel`), `@panel-hud-key` (default `A`, `off` for none) and
+  `@panel-key` (a key that builds and opens the session; off by default).
 - **Preview**: fzf calls `panel _preview`, which runs the source's `preview`
   and renders the Markdown with glow (glow's own style, e.g. Catppuccin).
   Enter opens the same preview full-screen in glow's pager.
