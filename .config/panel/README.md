@@ -92,9 +92,9 @@ internally:
   changes), SQS queues (dead-letter queues with messages first).
 - **calendar** (gog, always `--readonly`): today and the next days, with a
   countdown and RSVP state.
-- **feature-flags** (aws CLI, read-only): flags kept the way
-  `@x-team-systems/sls-dynamodb-feature-flags` stores them (`pk = FEAT#<name>`,
-  `sk = A`; on when `pk1 = FEAT#ENABLED`). One view per table (`table` or
+- **feature-flags** (aws CLI, read-only): flags kept in DynamoDB as
+  single-table items (`pk = FEAT#<name>`, `sk = A`; on when
+  `pk1 = FEAT#ENABLED`). One view per table (`table` or
   `region:table`); a filtered scan per fetch, since disabled flags are only in
   the base table. The pane, its tables and its window live in
   `config.local.json`. A toggled flag's `updatedAt` marks it changed (◆); the

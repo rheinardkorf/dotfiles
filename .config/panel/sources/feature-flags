@@ -1,6 +1,6 @@
 #!/usr/bin/env zsh
-# panel source: feature flags kept in DynamoDB the way @x-team-systems/
-# sls-dynamodb-feature-flags stores them, through the aws CLI. Read-only, except
+# panel source: feature flags kept in DynamoDB as single-table items (the layout
+# a DynamoDB feature-flags library uses), through the aws CLI. Read-only, except
 # `run toggle` (alt-t), which turns one flag on or off once you've said yes.
 #
 #   feature-flags fetch <table>          every flag in the table, alphabetical
