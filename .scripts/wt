@@ -25,6 +25,10 @@ wt: git worktrees in the <project>/.bare layout, opened in tmux
   wt prune [--dry-run] [-y] [--force-gone]
                                      remove every finished worktree (asks once)
   wt convert [--dry-run] [-y]        turn a plain clone into the .bare layout
+  wt clone [-s] <url|owner/repo> [<folder>]
+                                     clone a repo straight into the .bare layout
+  wt sync [<folder>]                 fetch every .bare project in a folder and
+                                     fast-forward their default branches
   wt help [<command>]                this overview, or details for one command
 
   --dry-run  show what would happen, change nothing
@@ -156,6 +160,37 @@ nested submodules, a merge or rebase in progress, or a detached HEAD.
 
   --dry-run  show the plan only
   -y         don't ask
+EOF
+    ;;
+    clone) cat <<'EOF'
+wt clone [-s] <url|owner/repo> [<folder>]
+
+Clones a repo into the .bare layout, in the current folder:
+  <folder>/.bare     the repository
+  <folder>/<main>/   a worktree for the default branch, tracking origin
+
+<folder> defaults to the repo's name. owner/repo is short for
+git@github.com:owner/repo.git. Submodules are checked out too. Then it opens
+the worktree in tmux like wt new (a window; -s its own session).
+
+  wt clone owner/repo
+  wt clone git@github.com:owner/repo.git my-folder
+EOF
+    ;;
+    sync) cat <<'EOF'
+wt sync [<folder>]
+
+Updates every project in the .bare layout directly inside <folder> (default:
+the current folder; inside a project, just that project). Folders without a
+.bare (plain clones, anything else) are skipped.
+
+For each project: fetches origin (pruning deleted branches), then
+fast-forwards the default branch, and its worktree if it has one. It never
+merges or rebases: a default branch with local commits, or a worktree whose
+changes are in the way, is left alone and reported. Other worktrees aren't
+touched; finished ones are counted (wt prune removes them).
+
+  wt sync ~/Development/work/code
 EOF
     ;;
     help) usage ;;
@@ -763,6 +798,104 @@ cmd_convert() {
   return 0
 }
 
+cmd_clone() {
+  local session=0 url= name=
+  while (( $# )); do
+    case $1 in
+      -s) session=1 ;;
+      -*) die "unknown option $1 (usage: wt clone [-s] <url|owner/repo> [<folder>])" ;;
+      *)  if [[ -z $url ]]; then url=$1
+          elif [[ -z $name ]]; then name=$1
+          else die "usage: wt clone [-s] <url|owner/repo> [<folder>]"; fi ;;
+    esac
+    shift
+  done
+  [[ -n $url ]] || die "usage: wt clone [-s] <url|owner/repo> [<folder>]"
+  # owner/repo: a GitHub repo over ssh
+  [[ $url == [[:alnum:]_.-]##/[[:alnum:]_.-]## && ! -e $url ]] && url="git@github.com:${url%.git}.git"
+  [[ -n $name ]] || name=${${url%/}##*[/:]}
+  name=${name%.git}
+  [[ -n $name ]] || die "couldn't work out a folder name; pass one: wt clone <url> <folder>"
+  ROOT=${name:A} PROJECT=${name:A:t}
+  [[ -e $ROOT ]] && die "$ROOT already exists"
+
+  failed() { warn "$1"; rm -rf -- $ROOT; exit 1 }   # $ROOT is new: nothing of yours in it
+  mkdir -p -- $ROOT || die "couldn't create $ROOT"
+  print -r -- "cloning $url into $ROOT"
+  git init -q --bare $ROOT/.bare && print 'gitdir: ./.bare' > $ROOT/.git &&
+    g remote add origin $url || failed "couldn't set up $ROOT/.bare"
+  g fetch origin || failed "couldn't fetch $url"
+  g remote set-head origin --auto >/dev/null 2>&1
+  local base
+  base=$(default_branch) && has_ref refs/remotes/origin/$base ||
+    failed "origin has no default branch (is the repo empty?)"
+  local dir=$ROOT/$(folder $base)
+  g worktree add -q --track -b $base $dir origin/$base || failed "couldn't create the $base worktree"
+  git --git-dir=$ROOT/.bare symbolic-ref HEAD refs/heads/$base
+  print -r -- "cloned: $ROOT/.bare + $(folder $base)/ (tracking origin/$base)"
+  init_submodules $dir
+  open_in_tmux $dir $session
+}
+
+# sync_one <project-root> <name-width>: fetch, then fast-forward the default branch
+sync_one() {
+  ROOT=$1 PROJECT=$1:t
+  local w=$2 base wt= i b msg fin=0
+  local -a counts
+  say() { printf "%-${w}s  %s\n" $PROJECT "$1" }
+  g fetch -q --prune origin 2>/dev/null || { say "couldn't fetch origin"; return 1 }
+  base=$(default_branch) || { say "fetched (no default branch found)"; return 0 }
+  has_ref refs/remotes/origin/$base || { say "fetched (no origin/$base)"; return 0 }
+  load_worktrees
+  for (( i = 1; i <= $#WT_PATHS; i++ )); do
+    b=$WT_BRANCHES[i]
+    if [[ $b == $base ]]; then wt=$WT_PATHS[i]
+    elif [[ -n $b && -d $WT_PATHS[i] && -n $(branch_state $b $base) ]]; then (( fin++ )); fi
+  done
+  if ! has_ref refs/heads/$base; then
+    msg="fetched (no local $base)"
+  else
+    counts=($(g rev-list --left-right --count origin/$base...refs/heads/$base))  # behind ahead
+    if (( ! counts[1] )); then
+      msg="up to date"
+    elif (( counts[2] )); then
+      msg="$base has diverged from origin/$base ($counts[2] ahead, $counts[1] behind); left alone"
+    elif [[ -n $wt && -d $wt ]]; then
+      if git -C $wt merge -q --ff-only origin/$base >/dev/null 2>&1; then
+        msg="$base updated ($counts[1] new commit(s))"
+        if [[ -f $wt/.gitmodules ]] && ! git -C $wt submodule update -q --init --recursive 2>/dev/null; then
+          msg+=", but its submodules didn't update (git submodule update --init --recursive)"
+        fi
+      else
+        msg="$base is $counts[1] behind, but changes in $wt:t/ are in the way; left alone"
+      fi
+    else
+      g update-ref refs/heads/$base refs/remotes/origin/$base &&
+        msg="$base updated ($counts[1] new commit(s); it has no worktree)"
+    fi
+  fi
+  (( fin )) && msg+="; $fin finished worktree(s), wt prune removes them"
+  say "$msg"
+}
+
+cmd_sync() {
+  (( $# <= 1 )) && [[ ${1:-} != -* ]] || die "usage: wt sync [<folder>]"
+  local dir=${${1:-$PWD}:A} p w=0 failed=0
+  [[ -d $dir ]] || die "no folder $dir"
+  local -a projects
+  if [[ -d $dir/.bare ]]; then
+    projects=($dir)
+  elif (( ! $# )) && find_root; then
+    projects=($ROOT)
+  else
+    projects=($dir/*/.bare(N/:h))
+  fi
+  (( $#projects )) || die "no projects in the .bare layout in $dir (plain clones are skipped; wt convert turns one into the layout)"
+  for p in $projects; do (( ${#p:t} > w )) && w=${#p:t}; done
+  for p in $projects; do sync_one $p $w || failed=1; done
+  return $failed
+}
+
 # --- Main ----------------------------------------------------------------------
 
 cmd=${1:-help}
@@ -777,6 +910,8 @@ case $cmd in
   rm|remove)      cmd_rm "$@" ;;
   prune)          cmd_prune "$@" ;;
   convert)        cmd_convert "$@" ;;
+  clone)          cmd_clone "$@" ;;
+  sync)           cmd_sync "$@" ;;
   help|-h|--help) if (( $# )); then help_for $1; else usage; fi ;;
   *)              usage >&2; die "unknown command '$cmd'" ;;
 esac
