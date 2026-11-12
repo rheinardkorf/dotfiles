@@ -10,7 +10,7 @@ set -uo pipefail
 # file; let them finish first (the hooks run this in the background)
 sleep 2
 
-dir="${TMPDIR:-$(getconf DARWIN_USER_TEMP_DIR)}"
+dir="${TMPDIR:-$(getconf DARWIN_USER_TEMP_DIR 2>/dev/null || echo /tmp)}"
 dir="${dir%/}"
 live="$(tmux list-sessions -F '#{session_id}-#{session_created}' 2>/dev/null | tr -d '$')"
 

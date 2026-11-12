@@ -58,7 +58,7 @@ case "${1:-}" in
     transcript="$("$JQ_BIN" -r '.transcript_path // empty' <<<"$input" 2>/dev/null)"
     if [[ -f "$transcript" ]]; then
       (
-        offset="$(stat -f %z "$transcript")"
+        offset="$(wc -c < "$transcript" | tr -d ' ')"   # portable (stat differs on macOS/Linux)
         while [[ -e "$state_file" ]]; do
           sleep 1
           if tail -c +"$((offset + 1))" "$transcript" | grep -q 'Request interrupted by user'; then
