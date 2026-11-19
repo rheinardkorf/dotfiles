@@ -5,7 +5,7 @@
   // no fetching after this long without keyboard or mouse ("0" = never pause)
   "pause_when_idle": "10m",
 
-  // the HUD (panel hud, cmd+shift+a): A.D.A., one British Kokoro voice
+  // the HUD (muxdash hud, cmd+shift+a): A.D.A., one British Kokoro voice
   "assistant": {
     "name": "A.D.A.",
     "meaning": "Adaptive Daily Attendant",
@@ -41,7 +41,7 @@
     },
 
     // running agents (Claude Code sessions) and this turn's sub-agents, all local;
-    // hooks in ~/.claude/settings.json (panel event agents) push changes in.
+    // hooks in ~/.claude/settings.json (muxdash event agents) push changes in.
     // ctrl-o jumps to the agent's tmux pane
     "agents": {
       "title": "Agents",

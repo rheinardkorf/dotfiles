@@ -61,10 +61,16 @@ hs.hotkey.bind(meh, "s", function()
     hs.execute(home .. "/.scripts/kitty-panel streak " .. home .. "/.scripts/streak --width=600 --height=340 --edge=center-sized --opacity=1", true)
 end)
 
--- Bind hyper + p to the panel session (built or repaired; kitty opened if needed)
+-- Bind hyper + p to the muxdash session (built or repaired; kitty opened if needed),
+-- or panel's where muxdash isn't installed yet
 hs.hotkey.bind(hyper, "p", function()
-    -- panel finds its config by PANEL_MACHINE; zsh -c here doesn't read .zshrc, which exports it
-    hs.task.new("/bin/zsh", nil, {"-c", "PANEL_MACHINE=" .. machineName() .. " " .. os.getenv("HOME") .. "/.scripts/panel-open"}):start()
+    -- both find their config by the machine name; zsh -c here doesn't read .zshrc, which exports it
+    local home = os.getenv("HOME")
+    if hs.fs.attributes(home .. "/.local/bin/muxdash-open") then
+        hs.task.new("/bin/zsh", nil, {"-c", "MUXDASH_MACHINE=" .. machineName() .. " " .. home .. "/.local/bin/muxdash-open"}):start()
+    else
+        hs.task.new("/bin/zsh", nil, {"-c", "PANEL_MACHINE=" .. machineName() .. " " .. home .. "/.scripts/panel-open"}):start()
+    end
 end)
 
 -- Get the current window app id

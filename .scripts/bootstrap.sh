@@ -13,9 +13,12 @@ DRY_RUN=false; [[ "${1:-}" == "--dry-run" ]] && DRY_RUN=true
 BREWFILE="${BREWFILE:-$HOME/Brewfile.core}"
 TMUX_DIR="${TMUX_DIR:-$HOME/.config/tmux}"
 CATPPUCCIN_VERSION="v2.3.1"   # keep in sync with theme-catppuccin.conf
+MUXDASH_VERSION="v0.1.0"      # github.com/rheinardkorf/muxdash: a release tag
+MUXDASH_DIR="${MUXDASH_DIR:-$HOME/.local/share/muxdash}"
 CLAUDE_SETTINGS="${CLAUDE_SETTINGS:-$HOME/.claude/settings.json}"
 CLAUDE_STATUS="~/.config/tmux/scripts/claude-status.sh"
-PANEL_EVENT='$HOME/.scripts/panel event agents'
+MUXDASH_EVENT='$HOME/.local/bin/muxdash event agents'
+PANEL_EVENT='$HOME/.scripts/panel event agents'   # muxdash's old self: its hooks are removed
 
 ok=0; changed=0; missing=0; problems=0
 say()  { printf '  %-8s %s\n' "$1" "$2"; }
@@ -141,7 +144,36 @@ else
     || fail "catppuccin clone failed"
 fi
 
-# --- Claude Code hooks: status (🔔 / ✓ in the tmux bar) and panel's agents pane --
+# --- muxdash: the tmux dashboard (prefix A, hyper+p; config in ~/.config/muxdash) --
+# Cloned at a release tag, like catppuccin, and moved to a new MUXDASH_VERSION when
+# the clone has no changes of its own. muxdash and muxdash-open go in ~/.local/bin.
+echo "muxdash"
+if [[ -d "$MUXDASH_DIR/.git" ]]; then
+  if git -C "$MUXDASH_DIR" tag --points-at HEAD | grep -qxF "$MUXDASH_VERSION"; then okay "muxdash $MUXDASH_VERSION"
+  elif [[ -n "$(git -C "$MUXDASH_DIR" status --porcelain 2>/dev/null)" ]]; then
+    fail "muxdash has local changes in ${MUXDASH_DIR/#$HOME/~}; not moving it to $MUXDASH_VERSION (left as is)"
+  else
+    todo "muxdash $(git -C "$MUXDASH_DIR" describe --tags 2>/dev/null || echo '?') -> $MUXDASH_VERSION"
+    run git -C "$MUXDASH_DIR" fetch -q --depth 1 origin tag "$MUXDASH_VERSION" 2>/dev/null \
+      && run git -C "$MUXDASH_DIR" -c advice.detachedHead=false checkout -q "$MUXDASH_VERSION" \
+      || fail "muxdash update to $MUXDASH_VERSION failed"
+  fi
+else
+  todo "muxdash $MUXDASH_VERSION"
+  run git clone -q -c advice.detachedHead=false -b "$MUXDASH_VERSION" --depth 1 https://github.com/rheinardkorf/muxdash.git "$MUXDASH_DIR" 2>/dev/null \
+    || fail "muxdash clone failed"
+fi
+for bin in muxdash muxdash-open; do
+  link="$HOME/.local/bin/$bin"
+  if [[ "$(readlink "$link" 2>/dev/null)" == "$MUXDASH_DIR/bin/$bin" ]]; then okay "$bin in ~/.local/bin"
+  elif [[ -e "$link" || -L "$link" ]]; then fail "~/.local/bin/$bin is something else (left as is)"
+  else
+    todo "$bin in ~/.local/bin"
+    run mkdir -p "$HOME/.local/bin" && run ln -s "$MUXDASH_DIR/bin/$bin" "$link" || fail "could not link $bin"
+  fi
+done
+
+# --- Claude Code hooks: status (🔔 / ✓ in the tmux bar) and muxdash's agents pane --
 echo "Claude Code hooks"
 if ! command -v claude >/dev/null && [[ ! -d "$(dirname "$CLAUDE_SETTINGS")" ]]; then
   say "skip" "Claude Code not installed"
@@ -153,9 +185,23 @@ else
           "UserPromptSubmit|$CLAUDE_STATUS clear|false" "PostToolUse|$CLAUDE_STATUS resume|false"
           "PostToolUseFailure|$CLAUDE_STATUS resume|false" "SessionEnd|$CLAUDE_STATUS clear|false" )
   for event in UserPromptSubmit Stop Notification PostToolUse PostToolUseFailure SubagentStart SubagentStop SessionStart SessionEnd; do
-    hooks+=( "$event|$PANEL_EVENT|true" )
+    hooks+=( "$event|$MUXDASH_EVENT|true" )
   done
   [[ -f "$CLAUDE_SETTINGS" ]] || { $DRY_RUN || { mkdir -p "$(dirname "$CLAUDE_SETTINGS")"; echo '{}' > "$CLAUDE_SETTINGS"; }; }
+  # panel became muxdash: panel's hooks go (muxdash's are added below); nothing else changes
+  if [[ -f "$CLAUDE_SETTINGS" ]] && jq -e --arg c "$PANEL_EVENT" \
+       '[.hooks[]?[]?.hooks[]?.command] | index($c)' "$CLAUDE_SETTINGS" >/dev/null 2>&1; then
+    todo "remove panel's hooks (muxdash's replace them)"
+    if ! $DRY_RUN; then
+      cp "$CLAUDE_SETTINGS" "$CLAUDE_SETTINGS.bak-panel"
+      tmp="$(mktemp)"
+      if jq --arg c "$PANEL_EVENT" '.hooks |= (map_values(map(.hooks |= map(select(.command != $c)))
+             | map(select(.hooks | length > 0))) | with_entries(select(.value | length > 0)))' \
+           "$CLAUDE_SETTINGS" > "$tmp" && jq -e . "$tmp" >/dev/null; then
+        mv "$tmp" "$CLAUDE_SETTINGS"; say "" "(previous settings saved as $(basename "$CLAUDE_SETTINGS").bak-panel)"
+      else fail "removing panel's hooks failed; settings left unchanged"; rm -f "$tmp"; fi
+    fi
+  fi
   add=()
   for h in "${hooks[@]}"; do
     IFS='|' read -r event cmd async <<<"$h"
@@ -181,7 +227,7 @@ else
   fi
 fi
 
-# --- Assistant voice: Kokoro, an offline voice model for panel's HUD -------------
+# --- Assistant voice: Kokoro, an offline voice model for muxdash's HUD -----------
 # Model files from the kokoro-onnx release (checked by size), and the uv
 # environment the HUD runs it in, made once so the first briefing isn't slow.
 echo "Assistant voice (Kokoro)"

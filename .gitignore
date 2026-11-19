@@ -87,6 +87,10 @@
 !.config/karabiner/
 !.config/karabiner/**
 .config/karabiner/automatic_backups/
+!.config/muxdash/
+!.config/muxdash/**
+# ...but not the local layer (anything that shouldn't be public)
+.config/muxdash/config.local.json
 !.config/nushell/
 !.config/nushell/**
 # ...but never shell history (it can contain anything typed, including secrets)

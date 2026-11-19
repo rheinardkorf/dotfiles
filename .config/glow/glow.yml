@@ -1,5 +1,5 @@
 # style name or JSON path (default "auto"). glow does not expand ~ here.
-# Catppuccin Mocha, from github.com/catppuccin/glamour (MIT). panel uses it too.
+# Catppuccin Mocha, from github.com/catppuccin/glamour (MIT). muxdash uses it too.
 style: "/Users/rheinardkorf/.config/glow/catppuccin-mocha.json"
 # mouse support (TUI-mode only)
 mouse: false
