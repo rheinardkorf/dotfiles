@@ -8,7 +8,7 @@ sort_order = [
 ]
 
 # Sessions never listed (still in tmux's own prefix s)
-blacklist = ["muxdash-fetcher", "panel-fetcher"]   # muxdash's (and panel's) background fetcher
+blacklist = ["muxdash-fetcher"]   # muxdash's background fetcher
 
 [tui]
 show_icons = true

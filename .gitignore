@@ -95,10 +95,6 @@
 !.config/nushell/**
 # ...but never shell history (it can contain anything typed, including secrets)
 .config/nushell/history.*
-!.config/panel/
-!.config/panel/**
-# ...but not the local layer (anything that shouldn't be public)
-.config/panel/config.local.json
 !.config/sesh/
 !.config/sesh/**
 !.config/sketchybar/
