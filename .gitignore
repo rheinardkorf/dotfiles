@@ -82,6 +82,8 @@
 !.config/gh/**
 !.config/glow/
 !.config/glow/**
+!.config/notula/
+!.config/notula/**
 !.config/git/
 !.config/git/**
 !.config/karabiner/

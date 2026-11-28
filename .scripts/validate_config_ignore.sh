@@ -42,6 +42,8 @@ should_track=(
   "$HOME/.config/git/ignore"
   "$HOME/.config/glow/glow.yml"
   "$HOME/.config/glow/catppuccin-mocha.json"
+  "$HOME/.config/notula/config.json"
+  "$HOME/.config/notula/catppuccin-mocha.json"
   "$HOME/.config/sesh/sesh.toml"
   "$HOME/.config/tmux/tmux.conf"
   "$HOME/.config/tmux/scripts/new-helper.sh"
