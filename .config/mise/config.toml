@@ -4,6 +4,7 @@
 
 [tools]
 node = "26"
+"npm:@passajs/cli" = "latest"
 
 # Global CLIs, tracking latest. Project tools (osls/serverless, aws-cdk, ...) are
 # not here on purpose: each project declares its own version.
