@@ -272,6 +272,36 @@ else
   run gh repo clone "$STREAK_REPO" "$STREAK_DIR" -- -q || fail "could not clone $STREAK_REPO (does this gh account have access?)"
 fi
 
+# --- Notula: the notes workspace; notula and v (its viewer) in ~/.local/bin -----
+# A repo being worked on, so it's only cloned when missing, never updated.
+echo "Notula"
+NOTULA_SRC="${NOTULA_SRC:-$HOME/Development/rheinardkorf/notula}"   # NOTULA_DIR is notula's own
+if [[ -d "$NOTULA_SRC/.git" ]]; then
+  okay "notula in ${NOTULA_SRC/#$HOME/~}"
+else
+  todo "notula into ${NOTULA_SRC/#$HOME/~}"
+  run git clone -q https://github.com/rheinardkorf/notula.git "$NOTULA_SRC" || fail "notula clone failed"
+fi
+BUN="$(command -v bun || echo "$HOME/.bun/bin/bun")"
+if [[ -d "$NOTULA_SRC/node_modules/@yowazi" ]]; then
+  okay "notula's dependencies"
+elif [[ ! -x "$BUN" ]]; then
+  fail "notula needs bun (https://bun.sh); install it, then run this again"
+else
+  todo "notula's dependencies (bun install)"
+  $DRY_RUN || (cd "$NOTULA_SRC" && "$BUN" install --silent --frozen-lockfile) || fail "bun install failed in ${NOTULA_SRC/#$HOME/~}"
+fi
+for pair in notula:bin/notula v:libexec/notula-view; do
+  bin="${pair%%:*}"; target="$NOTULA_SRC/${pair#*:}"
+  link="$HOME/.local/bin/$bin"
+  if [[ "$(readlink "$link" 2>/dev/null)" == "$target" ]]; then okay "$bin in ~/.local/bin"
+  elif [[ -e "$link" || -L "$link" ]]; then fail "~/.local/bin/$bin is something else (left as is)"
+  else
+    todo "$bin in ~/.local/bin"
+    run mkdir -p "$HOME/.local/bin" && run ln -s "$target" "$link" || fail "could not link $bin"
+  fi
+done
+
 # --- Machine name (used by SketchyBar / Hammerspoon) ---------------------------
 echo "Machine"
 if [[ -s "$HOME/.config/machine-name" ]]; then okay "machine-name: $(head -n1 "$HOME/.config/machine-name")"
