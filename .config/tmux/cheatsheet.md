@@ -56,6 +56,10 @@
    󰚩 name (right)  a Claude is waiting in another session
                   markers clear when you reply
 
+ NOTES (notula: open a notes window with  notula [folder|file])
+   prefix g       search notes, or start a new one  (notes windows only)
+   prefix i       insert an image                   (notes windows only)
+
  COPY / SCROLL
    mouse wheel    scroll back
    prefix v       enter copy mode (vi keys; ? search up, / down, n next)
